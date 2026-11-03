@@ -1,4 +1,4 @@
-package com.green;
+package java.com.green;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
