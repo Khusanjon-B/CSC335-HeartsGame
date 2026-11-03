@@ -12,4 +12,5 @@ Build a basic Hearts card game implementation for learning and coursework.
 =======
 - Not production-ready
 - Ryan's note
+- another note from Ryan, but from my desktop
 
