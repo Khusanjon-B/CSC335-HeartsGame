@@ -8,5 +8,8 @@ Build a basic Hearts card game implementation for learning and coursework.
 ## Notes
 - Course project
 - Work in progress
+- Check wiki to learn how to use git
+=======
 - Not production-ready
 - Ryan's note
+
