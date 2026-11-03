@@ -1,4 +1,4 @@
-package java.com.green;
+package com.green;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Scanner;
