@@ -3,6 +3,7 @@ package com.green;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.Socket;
+import java.net.SocketException;
 
 public class Reader implements Runnable{
     private Socket socket;
@@ -19,11 +20,10 @@ public class Reader implements Runnable{
     @Override
     public void run(){
         try{
-            while(!response.equals("end")){
-                response = in.readLine();
+            while(socket != null && !socket.isClosed() && (response = in.readLine()) != null){
                 System.out.println("ESP32 says: " + response);
             }
-            socket.close();
+        }catch(SocketException e){
             System.out.println("connection ended");
         }catch(Exception e){
             e.printStackTrace();

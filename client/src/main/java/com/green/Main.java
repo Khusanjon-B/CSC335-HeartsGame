@@ -1,11 +1,11 @@
 package com.green;
+
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Scanner;
 
 public class Main {
     public static void main(String[] args) {
-        //10.100.63.182
         String message = "";
         String bridgeIp = "192.168.4.200"; 
         int port = 5000;
@@ -24,6 +24,7 @@ public class Main {
                 out.println(message);
             }
             scan.close();
+            out.close();
             socket.close();
         }catch(Exception e){
             e.printStackTrace();
