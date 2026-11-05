@@ -1,6 +1,6 @@
 package com.green.controller;
 
-import com.green.App;
+import com.green.*;
 
 public class Controller {
     App app;

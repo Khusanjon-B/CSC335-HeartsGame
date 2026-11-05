@@ -1,10 +1,13 @@
 module client { 
     requires javafx.controls;
     requires javafx.fxml;
-    requires javafx.graphics;
+    requires transitive javafx.graphics;
 
     exports com.green;
+    exports com.green.controller;
 
+
+    opens com.green.controller to javafx.fxml;
     opens com.green to javafx.fxml;
     
 }

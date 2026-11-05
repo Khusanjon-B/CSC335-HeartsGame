@@ -19,14 +19,14 @@
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-controls</artifactId>
-            <version>25-ea+5</version>
+            <version>25.0.5</version>
         </dependency>
         
         <!-- JavaFX FXML Library -->
         <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-fxml</artifactId>
-            <version>25-ea+5</version>
+            <version>25.0.5</version>
         </dependency>
     </dependencies>
 
@@ -42,6 +42,9 @@
                 <version>0.0.8</version>
                 <configuration>
                     <mainClass>com.green.Main</mainClass> 
+                    <options>
+                        <option>--enable-native-access=javafx.graphics</option>
+                    </options>
                 </configuration>
             </plugin>
         </plugins>

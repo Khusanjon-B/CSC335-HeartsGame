@@ -29,7 +29,7 @@ public class App extends Application{
         this.stage.setTitle("cards");
         root = new Pane();
         try{
-            loader = new FXMLLoader(getClass().getResource("testingFXML.fxml"));
+            loader = new FXMLLoader(getClass().getResource("login.fxml"));
             FXMLpage = loader.load();
             controller = loader.getController();
             controller.setApp(this);
@@ -57,6 +57,13 @@ public class App extends Application{
         }
         System.out.println(page);
     }
+    @Override 
+    public void stop(){
+        System.exit(0);
+    }
 
+    public void send(String str){
+        
+    }
 
 }
