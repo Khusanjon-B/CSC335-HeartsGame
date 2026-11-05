@@ -9,8 +9,16 @@ public class Main {
         String message = "";
         String bridgeIp = "192.168.4.200"; 
         int port = 5000;
-
+        boolean GUI = true;
         System.out.println("connecting to " + bridgeIp + ":" + port);
+
+
+
+        if(GUI){
+            App.launch(args);
+        }else{
+            
+        }
 
         try{
             Scanner scan = new Scanner(System.in);
