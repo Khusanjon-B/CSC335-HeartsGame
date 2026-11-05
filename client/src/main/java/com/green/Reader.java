@@ -7,26 +7,19 @@ import java.net.Socket;
 public class Reader implements Runnable{
     private Socket socket;
     private BufferedReader in;
-    private String response = "";
     public Reader(Socket socket){
         this.socket = socket;
-        try{
-            in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        }catch(Exception e){
-            e.printStackTrace();
-        }
     }
     @Override
     public void run(){
+        String response = "";
         try{
-            while(!response.equals("end")){
-                response = in.readLine();
-                System.out.println("ESP32 says: " + response);
+            in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            while(socket != null && !socket.isClosed() && (response = in.readLine()) != null){
+                System.out.println("Server says: " + response);
             }
-            socket.close();
-            System.out.println("connection ended");
         }catch(Exception e){
-            e.printStackTrace();
+            System.out.println("input stream connection ended");
         }
     }
 
