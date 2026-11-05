@@ -23,6 +23,10 @@ public class App extends Application{
     private VBox FXMLpage;
 
     private Pane root;
+
+
+
+
     @Override
     public void start(Stage arg0) throws Exception {
         this.stage = new Stage();
@@ -63,7 +67,7 @@ public class App extends Application{
     }
 
     public void send(String str){
-        
+            MessageBridge.getQueue().offer(str);
     }
 
 }
