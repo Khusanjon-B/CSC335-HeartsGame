@@ -1,73 +1,102 @@
-// Minimal Qt TCP test server: listens on all IPv4 interfaces,
-// logs connects/disconnects, prints each line a client sends,
-// and replies "ack: <line>" so the client can confirm the round trip.
+// ---------------------------------------------------------------------------
+// main.cpp - Hearts server entry point.
 //
 // Usage: test_server [port]   (default 5000)
+//
+// What main does:
+//   1. Opens the SQLite database (hearts.db next to the .exe).
+//   2. Starts the TCP Server.
+//   3. Starts a console thread so you can type broadcasts or "exit".
+//   4. Runs Qt's event loop, which handles all network traffic.
+//
+// Files:
+//   Log.h          - logMessage() helper
+//   Connection.h   - the struct describing one connected client
+//   Database.h/cpp - all SQLite access (players table)
+//   Server.h/cpp   - TCP server, JSON parsing, login/logout/register
+//
+// THREADS: there are only two.
+//   - Main thread: Qt event loop. Runs ALL networking and ALL database work.
+//   - Console thread: waits on std::getline (which blocks, so it can't run
+//     on the main thread). It never touches the server's data directly. It
+//     hands work to the main thread with QMetaObject::invokeMethod, so
+//     there's still nothing that needs a lock.
+// ---------------------------------------------------------------------------
+
+#include "Database.h"
+#include "Log.h"
+#include "Server.h"
 
 #include <QCoreApplication>
-#include <QDateTime>
-#include <QHostAddress>
-#include <QNetworkInterface>
-#include <QTcpServer>
-#include <QTcpSocket>
-#include <QTextStream>
+#include <iostream>
+#include <string>
+#include <thread>
 
-static QTextStream out(stdout);
-
-static void log(const QString& msg)
+// Reads lines typed into the server's terminal, forever, on a background
+// thread. "exit" quits the server. Anything else is broadcast to all clients.
+static void startConsoleThread(QCoreApplication& app, Server& server)
 {
-    out << QDateTime::currentDateTime().toString("hh:mm:ss") << "  " << msg << Qt::endl;
+    std::thread([&app, &server] {
+        std::string input;
+        while (std::getline(std::cin, input)) {
+            const QString text = QString::fromStdString(input).trimmed();
+            if (text.isEmpty())
+                continue;
+
+            if (text == "exit") {
+                // Ask the main thread to stop the event loop.
+                QMetaObject::invokeMethod(&app, &QCoreApplication::quit, Qt::QueuedConnection);
+                return;
+            }
+
+            // Don't call server.broadcast() from here; this is the wrong
+            // thread. invokeMethod queues the lambda, and the main thread
+            // runs it on its next pass through the event loop.
+            QMetaObject::invokeMethod(&server, [&server, text] {
+                server.broadcast(text);
+            }, Qt::QueuedConnection);
+        }
+    }).detach();
+    // detach(): we never join this thread. It's stuck inside getline, so a
+    // join could hang forever. The OS cleans it up when the process exits.
+    // (The old code never joined or detached it, which makes C++ call
+    //  std::terminate when main returns.)
 }
 
 int main(int argc, char* argv[])
 {
     QCoreApplication app(argc, argv);
 
+    // ---- port from the command line ----
     quint16 port = 5000;
     if (argc > 1) {
         bool ok = false;
         port = QString(argv[1]).toUShort(&ok);
         if (!ok || port == 0) {
-            log("invalid port: " + QString(argv[1]));
+            logMessage("invalid port: " + QString(argv[1]));
             return 1;
         }
     }
 
-    QTcpServer server;
-
-    QObject::connect(&server, &QTcpServer::newConnection, [&server] {
-        while (server.hasPendingConnections()) {
-            QTcpSocket* sock = server.nextPendingConnection();
-            const QString who = sock->peerAddress().toString() + ":" +
-                                QString::number(sock->peerPort());
-            log("connected     " + who);
-
-            QObject::connect(sock, &QTcpSocket::readyRead, [sock, who] {
-                while (sock->canReadLine()) {
-                    const QByteArray line = sock->readLine().trimmed();
-                    log(who + "  > " + QString::fromUtf8(line));
-                    sock->write("ack: " + line + "\n");
-                }
-            });
-
-            QObject::connect(sock, &QTcpSocket::disconnected, [sock, who] {
-                log("disconnected  " + who);
-                sock->deleteLater();
-            });
-        }
-    });
-
-    // AnyIPv4 = 0.0.0.0, so other machines on the network can reach it.
-    if (!server.listen(QHostAddress::AnyIPv4, port)) {
-        log("listen failed: " + server.errorString());
+    // ---- database ----
+    // Stored next to the executable (inside the build folder, which git
+    // ignores). Delete the file to start over with an empty database.
+    Database db;
+    if (!db.open(QCoreApplication::applicationDirPath() + "/hearts.db"))
         return 1;
-    }
+    db.resetAllConnected();   // nobody is connected to a server that just started
 
-    log("listening on port " + QString::number(port) + " at:");
-    for (const QHostAddress& addr : QNetworkInterface::allAddresses()) {
-        if (addr.protocol() == QAbstractSocket::IPv4Protocol && !addr.isLoopback())
-            log("  " + addr.toString());
-    }
+    // ---- network server ----
+    Server server(db);
+    if (!server.start(port))
+        return 1;
 
-    return app.exec();
+    // When the event loop is about to stop (e.g. after "exit"), record a
+    // logout for everyone still logged in so the DB stays accurate.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &server, &Server::logoutEveryone);
+
+    startConsoleThread(app, server);
+
+    logMessage("type a message to broadcast it, or \"exit\" to quit");
+    return app.exec();   // blocks here, handling events, until quit()
 }
