@@ -22,5 +22,8 @@ public class Main {
         Thread socketThread = new Thread(new SocketManager(bridgeIp, port));
         socketThread.setDaemon(true);
         socketThread.start();
+
+        MessageBridge.getQueue().offer("hello");
+        
     }
 }
