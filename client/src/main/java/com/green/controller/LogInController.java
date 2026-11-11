@@ -1,7 +1,10 @@
 package com.green.controller;
 
+import com.green.MessageFormatter;
+
 import javafx.fxml.FXML;
 import javafx.scene.control.TextField;
+
 
 public class LogInController extends Controller{
     @FXML
@@ -11,6 +14,6 @@ public class LogInController extends Controller{
     @FXML 
     private void attemptLogIn(){
         System.out.println("Attempting to log in with username: " + usernameField.getText() + " and password: " + passwordField.getText());
-        app.send("login " + usernameField.getText() + " " + passwordField.getText());
+        send(MessageFormatter.login(usernameField.getText(), passwordField.getText()));
     }
 }
