@@ -10,10 +10,9 @@ public class Controller {
         this.app = app;
     }
     public void send(String str){
-        MessageBridge.getQueue().offer(str);
+        MessageBridge.getOutQueue().offer(str);
     }
     public void dispose(){
         System.out.println("page disposed");
     }
-
 }

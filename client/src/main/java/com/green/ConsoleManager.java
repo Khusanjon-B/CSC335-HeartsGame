@@ -45,7 +45,7 @@ public class ConsoleManager
         String password = scn.next();
 
         String message = MessageFormatter.login(username, password);
-        MessageBridge.getQueue().add(message);
+        MessageBridge.getOutQueue().add(message);
 
         System.out.println("Login attempt for user: " + username);
         System.out.println("Login attempt sent. Awaiting server response.");
@@ -69,7 +69,7 @@ public class ConsoleManager
         }
 
         String message = MessageFormatter.createAccount(email, username, password);
-        MessageBridge.getQueue().add(message);
+        MessageBridge.getOutQueue().add(message);
 
         System.out.println("Account creation attempt for user: " + username + " with email: " + email);
         System.out.println("Account creation attempt sent. Awaiting server response.");

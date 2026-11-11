@@ -7,7 +7,7 @@ public class MessageFormatter
     public static String login(String username, String password)
     {
         JsonObject json = new JsonObject();
-        json.addProperty("command", "LOGIN");
+        json.addProperty("command", "login");
         json.addProperty("username", username);
         json.addProperty("password", password);
         return json.toString();
@@ -16,7 +16,7 @@ public class MessageFormatter
     public static String createAccount(String email, String username, String password)
     {
         JsonObject json = new JsonObject();
-        json.addProperty("command", "CREATE_ACCOUNT");
+        json.addProperty("command", "register");
         json.addProperty("email", email);
         json.addProperty("username", username);
         json.addProperty("password", password);
