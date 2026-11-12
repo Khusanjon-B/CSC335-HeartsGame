@@ -30,7 +30,7 @@ public class SocketManager implements Runnable{
                 String message = "";
                 while(socket!=null && !socket.isClosed() && out!=null){
                     try{
-                        message = MessageBridge.getQueue().take();
+                        message = MessageBridge.getOutQueue().take();
                         out.println(message);
                         System.out.println("sending: " + message);
                     }catch(Exception e){

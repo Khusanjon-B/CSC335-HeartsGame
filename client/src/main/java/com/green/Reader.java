@@ -17,6 +17,7 @@ public class Reader implements Runnable{
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             while(socket != null && !socket.isClosed() && (response = in.readLine()) != null){
                 System.out.println("Server says: " + response);
+                MessageBridge.getInQueue().offer(response);
             }
         }catch(Exception e){
             System.out.println("input stream connection ended");
