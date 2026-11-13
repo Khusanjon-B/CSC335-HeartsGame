@@ -1,32 +1,29 @@
 package com.green;
-import java.io.PrintWriter;
-import java.net.Socket;
-import java.util.Scanner;
+
+import javafx.application.Application;
 
 public class Main {
+    static String bridgeIp = "192.168.4.200"; 
+    static int port = 5000;
+    static boolean GUI = true;
+
+
     public static void main(String[] args) {
-        //10.100.63.182
-        String message = "";
-        String bridgeIp = "192.168.4.200"; 
-        int port = 5000;
 
-        System.out.println("connecting to " + bridgeIp + ":" + port);
+        Thread socketThread = new Thread(new SocketManager(bridgeIp, port));
+        socketThread.setDaemon(true);
+        socketThread.start();
 
-        try{
-            Scanner scan = new Scanner(System.in);
-            Socket socket = new Socket(bridgeIp, port);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-            Thread inboxThread = new Thread(new Reader(socket));
-            inboxThread.start();
-            out.println("Hello from Ryan's laptop"); 
-            while(!message.equals("end")){
-                message = scan.nextLine();
-                out.println(message);
-            }
-            scan.close();
-            socket.close();
-        }catch(Exception e){
-            e.printStackTrace();
+        if(GUI){
+            Thread GUIThread = new Thread(() -> {
+                Application.launch(App.class, args);
+            });
+            GUIThread.start();
+        }
+        else
+        {
+            ConsoleManager console = new ConsoleManager();
+            console.start();
         }
     }
 }
