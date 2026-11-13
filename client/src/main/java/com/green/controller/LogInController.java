@@ -16,4 +16,10 @@ public class LogInController extends Controller{
         System.out.println("Attempting to log in with username: " + usernameField.getText() + " and password: " + passwordField.getText());
         send(MessageFormatter.login(usernameField.getText(), passwordField.getText()));
     }
+    @FXML private void goToCreateAccount(){
+        app.loadPage("createAccount.fxml");
+    }
+    @FXML private void goToForgotPassword(){
+        app.loadPage("forgotPassword.fxml");
+    }
 }

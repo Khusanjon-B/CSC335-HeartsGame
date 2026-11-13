@@ -5,7 +5,7 @@ import javafx.application.Application;
 public class Main {
     static String bridgeIp = "192.168.4.200"; 
     static int port = 5000;
-    static boolean GUI = false;
+    static boolean GUI = true;
 
 
     public static void main(String[] args) {
