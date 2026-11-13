@@ -15,6 +15,19 @@ public class MessageFormatter
 
     public static String createAccount(String email, String username, String password)
     {
+        if (!validPassword(password))
+        {
+            throw new IllegalArgumentException("Password does not meet the requirements");
+        }
+        if (!validEmail(email))
+        {
+            throw new IllegalArgumentException("Invalid Email Format");
+        }
+        if (!validUsername(username))
+        {
+            throw new IllegalArgumentException("Invalid Username Format");
+        }
+
         JsonObject json = new JsonObject();
         json.addProperty("command", "register");
         json.addProperty("email", email);
