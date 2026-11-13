@@ -39,6 +39,8 @@ public class MessageFormatter
         json.addProperty("password", password);
         json.addProperty("pin", pin);
         return json.toString();
+
+        
     }
     private static boolean validPassword(String password)
     {
