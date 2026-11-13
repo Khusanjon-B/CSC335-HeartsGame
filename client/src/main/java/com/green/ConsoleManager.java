@@ -68,18 +68,11 @@ public class ConsoleManager
             return;
         }
 
-        try
-        {
-            String message = MessageFormatter.createAccount(email, username, password);
-            MessageBridge.getOutQueue().add(message);
-            System.out.println("Account creation attempt for user: " + username + " with email: " + email);
-            System.out.println("Account creation attempt sent. Awaiting server response.");
-        }
-        catch (IllegalArgumentException e)
-        {
-            System.out.println(e.getMessage());
-            return;
-        }        
+        String message = MessageFormatter.createAccount(email, username, password);
+        MessageBridge.getOutQueue().add(message);
+
+        System.out.println("Account creation attempt for user: " + username + " with email: " + email);
+        System.out.println("Account creation attempt sent. Awaiting server response.");
     }
 }
 

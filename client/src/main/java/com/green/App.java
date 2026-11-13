@@ -66,8 +66,5 @@ public class App extends Application{
         System.exit(0);
     }
 
-    public void send(String str){
-            MessageBridge.getOutQueue().offer(str);
-    }
 
 }

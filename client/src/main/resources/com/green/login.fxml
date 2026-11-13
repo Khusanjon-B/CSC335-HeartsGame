@@ -11,8 +11,8 @@
     <AnchorPane maxHeight="-1.0" maxWidth="-1.0" prefHeight="-1.0" prefWidth="-1.0" VBox.vgrow="ALWAYS">
       <children>
             <Button alignment="CENTER" layoutX="375.0" layoutY="273.0" mnemonicParsing="false" onAction="#attemptLogIn" text="Log In"/>
-            <TextField layoutX="325.0" layoutY="163.0" promptText="Username" />
-            <TextField layoutX="325.0" layoutY="212.0" promptText="Password" />
+            <TextField layoutX="325.0" layoutY="163.0" promptText="Username" fx:id="usernameField"/>
+            <TextField layoutX="325.0" layoutY="212.0" promptText="Password" fx:id="passwordField"/>
       </children>
     </AnchorPane>
    </children>
