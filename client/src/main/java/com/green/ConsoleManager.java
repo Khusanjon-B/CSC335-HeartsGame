@@ -44,11 +44,33 @@ public class ConsoleManager
         System.out.print("Password: ");
         String password = scn.next();
 
-        String message = MessageFormatter.login(username, password);
-        MessageBridge.getOutQueue().add(message);
+        try
+        {
+            String message = MessageFormatter.login(username, password);
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
 
-        System.out.println("Login attempt for user: " + username);
-        System.out.println("Login attempt sent. Awaiting server response.");
+                    if (success)
+                    {
+                        System.out.println("Login successful");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Login failed: " + error);
+                    }
+                }
+            );
+
+        }
+        catch (Exception e)
+        {
+            System.out.println("Could not send login request: " + e.getMessage());
+        }
+        //System.out.println("Login attempt for user: " + username);
+        //System.out.println("Login attempt sent. Awaiting server response.");
     }
     private void createAccount()
     {
@@ -71,15 +93,34 @@ public class ConsoleManager
         try
         {
             String message = MessageFormatter.createAccount(email, username, password);
-            MessageBridge.getOutQueue().add(message);
-            System.out.println("Account creation attempt for user: " + username + " with email: " + email);
-            System.out.println("Account creation attempt sent. Awaiting server response.");
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
+
+                    if (success)
+                    {
+                        System.out.println("Account creation successful");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Account creation failed: " + error);
+                    }
+                }
+            );
+            //System.out.println("Account creation attempt for user: " + username + " with email: " + email);
+            //System.out.println("Account creation attempt sent. Awaiting server response.");
         }
         catch (IllegalArgumentException e)
         {
-            System.out.println(e.getMessage());
+            System.out.println("Invalid account information: " + e.getMessage());
             return;
         }    
+        catch (Exception e)
+        {
+            System.out.println("Could not send account creation request: " + e.getMessage());
+        }
     }
 }
 

@@ -32,7 +32,8 @@ public class SocketManager implements Runnable{
                     try{
                         message = MessageBridge.getOutQueue().take();
                         out.println(message);
-                        System.out.println("sending: " + message);
+                        //remove this debug print statement in production
+                        //System.out.println("sending: " + message);
                     }catch(Exception e){
                         socket.close();
                         System.out.println("output stream connection ended");

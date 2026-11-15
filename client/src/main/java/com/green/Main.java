@@ -10,6 +10,12 @@ public class Main {
 
     public static void main(String[] args) {
 
+        //Start MessageHandler
+        Thread messageHandlerThread = new Thread(new MessageHandler());
+        messageHandlerThread.setDaemon(true);
+        messageHandlerThread.start();
+        
+        //Start SocketManager
         Thread socketThread = new Thread(new SocketManager(bridgeIp, port));
         socketThread.setDaemon(true);
         socketThread.start();
