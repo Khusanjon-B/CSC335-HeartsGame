@@ -9,8 +9,7 @@ public class MessageFormatter
         JsonObject json = new JsonObject();
         json.addProperty("command", "login");
         json.addProperty("username", username);
-        String hashedPassword = PasswordHasher.hashPassword(username, password);
-        json.addProperty("password", hashedPassword);
+        json.addProperty("password", password);
         return json.toString();
     }
 
@@ -33,8 +32,7 @@ public class MessageFormatter
         json.addProperty("command", "register");
         json.addProperty("email", email);
         json.addProperty("username", username);
-        String hashedPassword = PasswordHasher.hashPassword(username, password);
-        json.addProperty("password", hashedPassword);
+        json.addProperty("password", password);
         return json.toString();
     }
     private static boolean validPassword(String password)

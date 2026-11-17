@@ -1,7 +1,7 @@
 package com.green;
 
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import com.google.gson.JsonObject;
@@ -9,15 +9,17 @@ import com.google.gson.JsonParser;
 
 public class RequestManager 
 {
-    private static final ConcurrentHashMap<String, Consumer<JsonObject>> 
+    private static final ConcurrentHashMap<Integer, Consumer<JsonObject>> 
     pendingRequests = new ConcurrentHashMap<>();
 
-    private static void addPendingRequest(String requestId, Consumer<JsonObject> callback)
+    private static final AtomicInteger nextRequestId = new AtomicInteger(1);
+
+    private static void addPendingRequest(int requestId, Consumer<JsonObject> callback)
     {
         pendingRequests.put(requestId, callback);
     }
 
-    public static void handleResponse(String requestId, JsonObject response)
+    public static void handleResponse(int requestId, JsonObject response)
     {
         Consumer<JsonObject> callback = pendingRequests.remove(requestId);
         if (callback != null)
@@ -33,7 +35,7 @@ public class RequestManager
     {
         JsonObject json = JsonParser.parseString(message).getAsJsonObject();
 
-        String requestId = UUID.randomUUID().toString();
+        int requestId = nextRequestId.getAndIncrement();
         json.addProperty("requestId", requestId);
         addPendingRequest(requestId, callback);
 

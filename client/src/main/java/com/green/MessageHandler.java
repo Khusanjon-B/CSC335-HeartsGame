@@ -32,9 +32,12 @@ public class MessageHandler implements Runnable
             
             if (json.has("requestId"))
             {
-                String requestId = json.get("requestId").getAsString();
-                RequestManager.handleResponse(requestId, json);
-                return;
+                int requestId = json.get("requestId").getAsInt();
+                if (requestId > 0)
+                {
+                    RequestManager.handleResponse(requestId, json);
+                    return;
+                }
             }
             switch (command)
             {

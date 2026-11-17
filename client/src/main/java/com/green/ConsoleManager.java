@@ -13,6 +13,7 @@ public class ConsoleManager
             System.out.println("1. Login");
             System.out.println("2. Create Account");
             System.out.println("3. Exit");
+            System.out.println("4. Recover Password");
 
             System.out.print("Enter your choice: ");
 
@@ -30,6 +31,10 @@ public class ConsoleManager
                 case "3":
                     System.out.println("Exiting...");
                     return;
+                case "4":
+                    System.out.println("Recover Password selected");
+                    recoverPassword();
+                    break;
                 default:
                     System.out.println("Invalid choice, try again");
                     break;
@@ -81,7 +86,7 @@ public class ConsoleManager
         String username = scn.next();
         System.out.print("Password: ");
         String password = scn.next();
-        //password requirement check client or server side?
+    
         System.out.print("Confirm Password: ");
         String confirmPassword = scn.next();
         if (!password.equals(confirmPassword))
@@ -89,10 +94,12 @@ public class ConsoleManager
             System.out.println("Passwords do not match");
             return;
         }
+        System.out.print("Pin between 4-8 numbers: ");
+        int pin = scn.nextInt();
 
         try
         {
-            String message = MessageFormatter.createAccount(email, username, password);
+            String message = MessageFormatter.createAccount(email, username, password, pin);
             RequestManager.sendRequest(message, response -> 
                 {
                     boolean success = response.get("success").getAsBoolean();
@@ -120,6 +127,41 @@ public class ConsoleManager
         catch (Exception e)
         {
             System.out.println("Could not send account creation request: " + e.getMessage());
+        }
+    }
+    private void recoverPassword()
+    {
+        System.out.println("== Recover Password ==");
+        System.out.print("Enter your email or username: ");
+        String input = scn.next();
+        System.out.print("Enter your pin: ");
+        int pin = scn.nextInt();
+
+        try
+        {
+            String message = MessageFormatter.recoverPassword(input, pin);
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
+
+                    if (success)
+                    {
+                        System.out.println("Password recovery successful.");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Password recovery failed: " + error);
+                    }
+                }
+            );
+            //System.out.println("Password recovery attempt for input: " + input);
+            //System.out.println("Password recovery attempt sent. Awaiting server response.");
+        }
+        catch (Exception e)
+        {
+            System.out.println("Could not send password recovery request: " + e.getMessage());
         }
     }
 }
