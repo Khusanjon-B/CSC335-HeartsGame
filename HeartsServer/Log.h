@@ -1,22 +1,26 @@
 #pragma once
 // ---------------------------------------------------------------------------
-// Log.h - one tiny helper used by every file to print timestamped lines.
+// Log.h - timestamped logging to the terminal AND to a log file.
 //
-// Example output:   23:41:07  connected     192.168.1.20:53211
+//   Terminal:  23:41:07  connected     192.168.1.20:53211
+//   File:      2026-11-16 23:41:07  connected     192.168.1.20:53211
 //
-// It's "inline" so it can live in a header and be included from many .cpp
-// files without the linker complaining about duplicate definitions.
-// (It's called logMessage instead of log so it can't clash with the math
-//  function log() from <cmath>.)
+// main() calls initLogFile() once at startup. After that, every logMessage()
+// goes to both places. If the file can't be opened, messages still go to
+// the terminal.
+//
+// The file is opened in "append" mode, so restarting the server on the same
+// day adds to that day's file instead of wiping it. Each line is flushed to
+// disk immediately, so nothing is lost if the server crashes.
+//
+// A mutex makes it safe to call from any thread.
 // ---------------------------------------------------------------------------
 
-#include <QDateTime>
 #include <QString>
-#include <QTextStream>
 
-inline void logMessage(const QString& msg)
-{
-    // Created once, the first time logMessage is called, then reused.
-    static QTextStream out(stdout);
-    out << QDateTime::currentDateTime().toString("hh:mm:ss") << "  " << msg << Qt::endl;
-}
+// Opens (or creates) the log file, creating its folder if needed.
+// Returns false if it couldn't be opened.
+bool initLogFile(const QString& filePath);
+
+// Prints one timestamped line to the terminal and the log file.
+void logMessage(const QString& msg);
