@@ -239,7 +239,7 @@ void Server::processLine(Connection& conn, const QByteArray& line)
     const Handler handler = it.value();
     (this->*handler)(conn, request);
 }
-
+// handleRegister requests
 void Server::handleRegister(Connection& conn, const Message& request)
 {
     const QJsonObject& b = request.body;
