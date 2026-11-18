@@ -13,7 +13,7 @@ public class MessageFormatter
         return json.toString();
     }
 
-    public static String createAccount(String email, String username, String password)
+    public static String createAccount(String email, String username, String password, String pin)
     {
         if (!validPassword(password))
         {
@@ -27,12 +27,17 @@ public class MessageFormatter
         {
             throw new IllegalArgumentException("Invalid Username Format");
         }
+        if (!validPin(pin))
+        {
+            throw new IllegalArgumentException("Invalid Pin Format");
+        }
 
         JsonObject json = new JsonObject();
         json.addProperty("command", "register");
         json.addProperty("email", email);
         json.addProperty("username", username);
         json.addProperty("password", password);
+        json.addProperty("pin", pin);
         return json.toString();
     }
     private static boolean validPassword(String password)
@@ -50,14 +55,20 @@ public class MessageFormatter
     }
 
     private static boolean validUsername(String username)
-{
-    return username != null && username.matches("^[a-zA-Z0-9_-]+$");
-}
+    {
+        return username != null && username.matches("^[a-zA-Z0-9_-]+$");
+    }
 
-    public static String recoverPassword(String input)
+    private static boolean validPin(String pin)
+    {
+        return pin != null && pin.matches("[0-9]{4,8}"); // Adjust the range as needed
+    }
+
+    public static String recoverPassword(String input, String pin)
     {
         JsonObject json = new JsonObject();
         json.addProperty("command", "recoverPassword");
+        json.addProperty("pin", pin);
         if (input.contains(".") && input.contains("@"))
         {
             json.addProperty("email", input);
@@ -70,4 +81,3 @@ public class MessageFormatter
         return json.toString();
     }
 }
-

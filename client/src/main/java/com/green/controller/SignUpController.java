@@ -27,6 +27,6 @@ public class SignUpController extends Controller {
             System.out.println("Passwords do not match!");
             return;
         }
-        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText()));
+        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText(), "0000")); //add pinField
     }
 }

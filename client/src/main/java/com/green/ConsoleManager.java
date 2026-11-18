@@ -95,7 +95,7 @@ public class ConsoleManager
             return;
         }
         System.out.print("Pin between 4-8 numbers: ");
-        int pin = scn.nextInt();
+        String pin = scn.next();
 
         try
         {
@@ -135,7 +135,7 @@ public class ConsoleManager
         System.out.print("Enter your email or username: ");
         String input = scn.next();
         System.out.print("Enter your pin: ");
-        int pin = scn.nextInt();
+        String pin = scn.next();
 
         try
         {
