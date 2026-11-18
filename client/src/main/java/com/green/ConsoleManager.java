@@ -13,6 +13,7 @@ public class ConsoleManager
             System.out.println("1. Login");
             System.out.println("2. Create Account");
             System.out.println("3. Exit");
+            System.out.println("4. Recover Password");
 
             System.out.print("Enter your choice: ");
 
@@ -30,6 +31,10 @@ public class ConsoleManager
                 case "3":
                     System.out.println("Exiting...");
                     return;
+                case "4":
+                    System.out.println("Recover Password selected");
+                    recoverPassword();
+                    break;
                 default:
                     System.out.println("Invalid choice, try again");
                     break;
@@ -44,11 +49,33 @@ public class ConsoleManager
         System.out.print("Password: ");
         String password = scn.next();
 
-        String message = MessageFormatter.login(username, password);
-        MessageBridge.getOutQueue().add(message);
+        try
+        {
+            String message = MessageFormatter.login(username, password);
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
 
-        System.out.println("Login attempt for user: " + username);
-        System.out.println("Login attempt sent. Awaiting server response.");
+                    if (success)
+                    {
+                        System.out.println("Login successful");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Login failed: " + error);
+                    }
+                }
+            );
+
+        }
+        catch (Exception e)
+        {
+            System.out.println("Could not send login request: " + e.getMessage());
+        }
+        //System.out.println("Login attempt for user: " + username);
+        //System.out.println("Login attempt sent. Awaiting server response.");
     }
     private void createAccount()
     {
@@ -59,7 +86,7 @@ public class ConsoleManager
         String username = scn.next();
         System.out.print("Password: ");
         String password = scn.next();
-        //password requirement check client or server side?
+    
         System.out.print("Confirm Password: ");
         String confirmPassword = scn.next();
         if (!password.equals(confirmPassword))
@@ -67,12 +94,75 @@ public class ConsoleManager
             System.out.println("Passwords do not match");
             return;
         }
+        System.out.print("Pin between 4-8 numbers: ");
+        String pin = scn.next();
 
-        String message = MessageFormatter.createAccount(email, username, password);
-        MessageBridge.getOutQueue().add(message);
+        try
+        {
+            String message = MessageFormatter.createAccount(email, username, password, pin);
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
 
-        System.out.println("Account creation attempt for user: " + username + " with email: " + email);
-        System.out.println("Account creation attempt sent. Awaiting server response.");
+                    if (success)
+                    {
+                        System.out.println("Account creation successful");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Account creation failed: " + error);
+                    }
+                }
+            );
+            //System.out.println("Account creation attempt for user: " + username + " with email: " + email);
+            //System.out.println("Account creation attempt sent. Awaiting server response.");
+        }
+        catch (IllegalArgumentException e)
+        {
+            System.out.println("Invalid account information: " + e.getMessage());
+            return;
+        }    
+        catch (Exception e)
+        {
+            System.out.println("Could not send account creation request: " + e.getMessage());
+        }
+    }
+    private void recoverPassword()
+    {
+        System.out.println("== Recover Password ==");
+        System.out.print("Enter your email or username: ");
+        String input = scn.next();
+        System.out.print("Enter your pin: ");
+        String pin = scn.next();
+
+        try
+        {
+            String message = MessageFormatter.recoverPassword(input, pin);
+            RequestManager.sendRequest(message, response -> 
+                {
+                    boolean success = response.get("success").getAsBoolean();
+
+                    if (success)
+                    {
+                        System.out.println("Password recovery successful.");
+                    }
+                    else
+                    {
+                        String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                        System.out.println("Password recovery failed: " + error);
+                    }
+                }
+            );
+            //System.out.println("Password recovery attempt for input: " + input);
+            //System.out.println("Password recovery attempt sent. Awaiting server response.");
+        }
+        catch (Exception e)
+        {
+            System.out.println("Could not send password recovery request: " + e.getMessage());
+        }
     }
 }
 
