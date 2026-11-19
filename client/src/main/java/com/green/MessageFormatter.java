@@ -61,7 +61,7 @@ public class MessageFormatter
     return username != null && username.matches("^[a-zA-Z0-9_-]+$");
 }
 
-    private static boolean validPin(String pin)
+    public static boolean validPin(String pin)
     {
         return pin != null && pin.matches("[0-9]{4,8}"); // Adjust the range as needed
     }

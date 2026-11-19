@@ -9,6 +9,8 @@ import javafx.scene.text.Text;
 public class RecoverPasswordController extends Controller{
     @FXML
     private TextField emailField;
+    @FXML
+    private TextField pinField;
     @FXML 
     private Text errorMessage;
 
@@ -19,9 +21,12 @@ public class RecoverPasswordController extends Controller{
             errorMessage.setText("Please fill in the email field.");
             return;
         }
-        String email = emailField.getText();
+        if(pinField.getText().isEmpty()){
+            errorMessage.setText("Please fill in the pin field.");
+            return;
+        }
 
-        send(MessageFormatter.recoverPassword(email));
+        send(MessageFormatter.recoverPassword(emailField.getText(), pinField.getText()));
     }
 
 

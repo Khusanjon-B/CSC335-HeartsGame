@@ -17,10 +17,12 @@ public class SignUpController extends Controller {
     @FXML
     private TextField confirmPasswordField;
     @FXML
+    private TextField pinField;
+    @FXML
     private Text errorMessage;
     @FXML 
     private void attemptSignUp(){
-        if(emailField.getText().isEmpty() || usernameField.getText().isEmpty() || passwordField.getText().isEmpty() || confirmPasswordField.getText().isEmpty()){
+        if(emailField.getText().isEmpty() || usernameField.getText().isEmpty() || passwordField.getText().isEmpty() || confirmPasswordField.getText().isEmpty() || pinField.getText().isEmpty()){
             System.out.println("Please fill in all fields!");
             errorMessage.setText("Please fill in all fields!");
             return;
@@ -46,7 +48,12 @@ public class SignUpController extends Controller {
             errorMessage.setText("Invalid username format!");
             return;
         }
-        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText(), "0000")); //add pinField
+        if(!MessageFormatter.validPin(pinField.getText())){
+            System.out.println("Invalid pin format!");
+            errorMessage.setText("Invalid pin format!");
+            return;
+        }
+        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText(), pinField.getText())); //add pinField
     }
 
     @FXML
