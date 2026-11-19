@@ -39,8 +39,10 @@ public class MessageFormatter
         json.addProperty("password", password);
         json.addProperty("pin", pin);
         return json.toString();
+
+        
     }
-    private static boolean validPassword(String password)
+    public static boolean validPassword(String password)
     {
         if (password.length() <= 8) return false;
 
@@ -49,17 +51,17 @@ public class MessageFormatter
         boolean hasSpecial = password.matches(".*[!@#$%^&*()_+\\-=\\[\\]{};':\"\\\\|,.<>\\/?].*");
         return hasLetter && hasNumber && hasSpecial;
     }
-    private static boolean validEmail(String email)
+    public static boolean validEmail(String email)
     {
         return email.matches("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
     }
 
-    private static boolean validUsername(String username)
-    {
-        return username != null && username.matches("^[a-zA-Z0-9_-]+$");
-    }
+    public static boolean validUsername(String username)
+{
+    return username != null && username.matches("^[a-zA-Z0-9_-]+$");
+}
 
-    private static boolean validPin(String pin)
+    public static boolean validPin(String pin)
     {
         return pin != null && pin.matches("[0-9]{4,8}"); // Adjust the range as needed
     }
