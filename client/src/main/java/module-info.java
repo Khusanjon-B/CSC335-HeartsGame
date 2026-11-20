@@ -2,7 +2,7 @@ module client {
     requires javafx.controls;
     requires javafx.fxml;
     requires transitive javafx.graphics;
-    requires com.google.gson;
+    requires transitive com.google.gson;
 
     exports com.green;
     exports com.green.controller;

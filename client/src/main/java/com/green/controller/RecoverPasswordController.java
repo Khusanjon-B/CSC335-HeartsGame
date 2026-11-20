@@ -1,8 +1,8 @@
 package com.green.controller;
 
 import com.green.RequestManager;
+import com.green.MessageFormatter;
 
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
@@ -33,14 +33,19 @@ public class RecoverPasswordController extends Controller{
             return;
         }
 
-        RequestManager.requestPasswordRecovery(emailField.getText(), pinField.getText(), response ->
-            runOnUiThread(() -> {
-                if (responseSucceeded(response)) {
-                    errorMessage.setText("Password recovery successful.");
-                } else {
-                    errorMessage.setText(responseError(response, "Password recovery failed."));
-                }
-            })
+        RequestManager.requestPasswordRecovery(
+            usernameField.getText(),
+            emailField.getText(),
+            pinField.getText(),
+            newPasswordField.getText(),
+            response ->
+                runOnUiThread(() -> {
+                    if (responseSucceeded(response)) {
+                        errorMessage.setText("Password recovery successful.");
+                    } else {
+                        errorMessage.setText(responseError(response, "Password recovery failed."));
+                    }
+                })
         );
     }
 

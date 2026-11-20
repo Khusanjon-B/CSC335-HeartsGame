@@ -48,14 +48,18 @@ public class RequestManager
         sendRequest(MessageFormatter.login(username, password), callback);
     }
 
-    public static void requestAccountCreation(String email, String username, String password,
-                                              String pin, Consumer<JsonObject> callback)
+    public static void requestAccountCreation(String email, String username, String password,String pin, Consumer<JsonObject> callback)
     {
         sendRequest(MessageFormatter.createAccount(email, username, password, pin), callback);
     }
 
-    public static void requestPasswordRecovery(String input, String pin, Consumer<JsonObject> callback)
+    public static void requestPasswordRecovery(String username, String email, String pin, String newPassword, Consumer<JsonObject> callback)
     {
-        sendRequest(MessageFormatter.recoverPassword(input, pin), callback);
+        sendRequest(MessageFormatter.recoverPassword(username, email, pin, newPassword), callback);
+    }
+
+    public static void requestLogout(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.logout(), callback);
     }
 }

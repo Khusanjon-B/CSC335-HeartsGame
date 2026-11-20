@@ -76,4 +76,9 @@ public class MessageFormatter
         json.addProperty("newPassword", newPassword);
         return json.toString();
     }
+    public static String logout(){
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "logout");
+        return json.toString();
+    }
 }
