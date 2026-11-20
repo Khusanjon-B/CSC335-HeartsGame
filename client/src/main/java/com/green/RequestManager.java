@@ -42,4 +42,20 @@ public class RequestManager
         MessageBridge.getOutQueue().offer(json.toString());
 
     }
+
+    public static void requestLogin(String username, String password, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.login(username, password), callback);
+    }
+
+    public static void requestAccountCreation(String email, String username, String password,
+                                              String pin, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.createAccount(email, username, password, pin), callback);
+    }
+
+    public static void requestPasswordRecovery(String input, String pin, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.recoverPassword(input, pin), callback);
+    }
 }
