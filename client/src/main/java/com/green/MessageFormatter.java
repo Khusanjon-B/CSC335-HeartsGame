@@ -44,7 +44,7 @@ public class MessageFormatter
     }
     public static boolean validPassword(String password)
     {
-        if (password.length() <= 8) return false;
+        if (password == null || password.length() <= 8) return false;
 
         boolean hasLetter = password.matches(".*[a-zA-Z].*");
         boolean hasNumber = password.matches(".*[0-9].*");
@@ -66,20 +66,14 @@ public class MessageFormatter
         return pin != null && pin.matches("[0-9]{4,8}"); // Adjust the range as needed
     }
 
-    public static String recoverPassword(String input, String pin)
+    public static String recoverPassword(String username, String email, String pin, String newPassword)
     {
         JsonObject json = new JsonObject();
-        json.addProperty("command", "recoverPassword");
+        json.addProperty("command", "recover_password");
+        json.addProperty("username", username);
+        json.addProperty("email", email);
         json.addProperty("pin", pin);
-        if (input.contains(".") && input.contains("@"))
-        {
-            json.addProperty("email", input);
-        }
-        else
-        {
-            json.addProperty("username", input);
-        }
-        
+        json.addProperty("newPassword", newPassword);
         return json.toString();
     }
 }

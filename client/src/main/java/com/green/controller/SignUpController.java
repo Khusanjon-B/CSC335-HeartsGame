@@ -1,7 +1,9 @@
 package com.green.controller;
 
 import com.green.MessageFormatter;
+import com.green.RequestManager;
 
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
@@ -27,7 +29,6 @@ public class SignUpController extends Controller {
             errorMessage.setText("Please fill in all fields!");
             return;
         }
-        System.out.println("Attempting to sign up with email: " + emailField.getText() + ", username: " + usernameField.getText() + ", password: " + passwordField.getText() + ", confirm password: " + confirmPasswordField.getText());
         if(!passwordField.getText().equals(confirmPasswordField.getText())){
             System.out.println("Passwords do not match!");
             errorMessage.setText("Passwords do not match!");
@@ -53,7 +54,16 @@ public class SignUpController extends Controller {
             errorMessage.setText("Invalid pin format!");
             return;
         }
-        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText(), pinField.getText())); //add pinField
+        RequestManager.sendRequest(
+            MessageFormatter.createAccount(emailField.getText(), usernameField.getText(),
+                passwordField.getText(), pinField.getText()),
+            response -> Platform.runLater(() -> {
+                boolean success = response.has("success") && response.get("success").getAsBoolean();
+                errorMessage.setText(response.has("message")
+                    ? response.get("message").getAsString()
+                    : (success ? "Account created. You can now log in." : "Account creation failed."));
+            })
+        );
     }
 
     @FXML
