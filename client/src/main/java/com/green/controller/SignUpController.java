@@ -1,8 +1,7 @@
 package com.green.controller;
 
-import com.green.MessageFormatter;
+import com.green.RequestManager;
 
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
@@ -31,27 +30,23 @@ public class SignUpController extends Controller {
             errorMessage.setText("Passwords do not match!");
             return;
         }
-        if(!MessageFormatter.validPassword(passwordField.getText())){
-            System.out.println("Password does not meet the requirements!");
-            errorMessage.setText("Password does not meet the requirements!");
-            return;
+        try {
+            RequestManager.requestAccountCreation(
+                    emailField.getText(),
+                    usernameField.getText(),
+                    passwordField.getText(),
+                    pinField.getText(),
+                    response -> runOnUiThread(() -> {
+                        if (responseSucceeded(response)) {
+                            app.loadPage("login.fxml");
+                        } else {
+                            errorMessage.setText(responseError(response, "Account creation failed."));
+                        }
+                    })
+            );
+        } catch (IllegalArgumentException e) {
+            errorMessage.setText(e.getMessage());
         }
-        if(!MessageFormatter.validEmail(emailField.getText())){
-            System.out.println("Invalid email format!");
-            errorMessage.setText("Invalid email format!");
-            return;
-        }
-        if(!MessageFormatter.validUsername(usernameField.getText())){
-            System.out.println("Invalid username format!");
-            errorMessage.setText("Invalid username format!");
-            return;
-        }
-        if(!MessageFormatter.validPin(pinField.getText())){
-            System.out.println("Invalid pin format!");
-            errorMessage.setText("Invalid pin format!");
-            return;
-        }
-        send(MessageFormatter.createAccount(emailField.getText(), usernameField.getText(), passwordField.getText(), pinField.getText())); //add pinField
     }
 
     @FXML
