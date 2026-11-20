@@ -3,7 +3,6 @@ package com.green.controller;
 import com.green.RequestManager;
 
 import javafx.fxml.FXML;
-import javafx.application.Platform;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
 
