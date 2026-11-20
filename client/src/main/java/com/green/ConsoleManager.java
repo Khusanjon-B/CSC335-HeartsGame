@@ -132,32 +132,34 @@ public class ConsoleManager
     private void recoverPassword()
     {
         System.out.println("== Recover Password ==");
-        System.out.print("Enter your email or username: ");
-        String input = scn.next();
+        System.out.print("Enter your username: ");
+        String username = scn.next();
+        System.out.print("Enter your email: ");
+        String email = scn.next();
         System.out.print("Enter your pin: ");
         String pin = scn.next();
+        System.out.print("Enter your new password: ");
+        String newPassword = scn.next();
 
         try
         {
-            String message = MessageFormatter.recoverPassword(input, pin);
+            String message = MessageFormatter.recoverPassword(username, email, pin, newPassword);
             RequestManager.sendRequest(message, response -> 
                 {
                     boolean success = response.get("success").getAsBoolean();
 
                     if (success)
                     {
-                        System.out.println("Password recovery successful.");
+                        System.out.println(response.get("message").getAsString());
                     }
                     else
                     {
-                        String error = response.has("error")
-                        ? response.get("error").getAsString() : "Unknown error";
+                        String error = response.has("message")
+                        ? response.get("message").getAsString() : "Unknown error";
                         System.out.println("Password recovery failed: " + error);
                     }
                 }
             );
-            //System.out.println("Password recovery attempt for input: " + input);
-            //System.out.println("Password recovery attempt sent. Awaiting server response.");
         }
         catch (Exception e)
         {

@@ -1,8 +1,10 @@
 package com.green.controller;
 
 import com.green.MessageFormatter;
+import com.green.RequestManager;
 
 import javafx.fxml.FXML;
+import javafx.application.Platform;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
 
@@ -20,8 +22,21 @@ public class LogInController extends Controller{
             errorMessage.setText("Please fill in all fields.");
             return;
         }
-        System.out.println("Attempting to log in with username: " + usernameField.getText() + " and password: " + passwordField.getText());
-        send(MessageFormatter.login(usernameField.getText(), passwordField.getText()));
+        RequestManager.sendRequest(
+            MessageFormatter.login(usernameField.getText(), passwordField.getText()),
+            response -> Platform.runLater(() -> {
+                boolean success = response.has("success") && response.get("success").getAsBoolean();
+                if (success) {
+                    errorMessage.setText(response.has("message")
+                        ? response.get("message").getAsString()
+                        : "Login successful.");
+                } else {
+                    errorMessage.setText(response.has("message")
+                        ? response.get("message").getAsString()
+                        : "Login failed.");
+                }
+            })
+        );
     }
     @FXML private void goToSignUp(){
         app.loadPage("createAccount.fxml");
