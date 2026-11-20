@@ -193,7 +193,6 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 
 ## Known issues / TODO
 
-- [ ] Client sends `"recoverPassword"` with only `pin` plus username **or** email; the server expects `"recover_password"` with username, email, pin, and `newPassword`.
 - [ ] Team Google Doc still shows `requestID` + `data`; paste in the sections from `PROTOCOL.md`.
 - [ ] Failed-login counting and lockout, with `failed_attempts` in `login_result` (issue #54).
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
