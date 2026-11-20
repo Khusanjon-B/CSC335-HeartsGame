@@ -1,12 +1,12 @@
 # Hearts Server — Current State
 
-_Last updated: 2026-11-16_
+_Last updated: 2026-11-19_
 
 A Qt 6 console app that accepts TCP connections from Hearts clients, handles
 accounts (register / login / logout / password recovery), and stores players in
 a SQLite database. No game logic yet.
 
-**Manual test checklist:** [TESTING.md](TESTING.md)
+**Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
 
 ---
 
@@ -17,7 +17,9 @@ a SQLite database. No game logic yet.
 | TCP server (multiple clients) | ✅ Working |
 | JSON message protocol with `requestId` | ✅ Working |
 | Register (username, email, password, pin) | ✅ Working (tested) |
-| Login / logout | ✅ Working (tested) |
+| Login / logout (issue #59) | ✅ Working (tested) |
+| `error` code in every reply | ✅ Working (tested) |
+| Failed-login tracking / lockout (issue #54) | ❌ Not started |
 | Password recovery with a pin | ✅ Working (tested) |
 | Salted SHA-256 for passwords and pins | ✅ Working |
 | Per-connection message history | ✅ Working (last 100 messages) |
@@ -52,6 +54,8 @@ a SQLite database. No game logic yet.
 | `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
 | `Message.h` | `struct Message`, the requestId rules, and `redactSecrets()` |
+| `ErrorCodes.h` | Every error code the server can send |
+| `PROTOCOL.md` | The message protocol spec, written to match the team Google Doc |
 | `Connection.h` | `struct Connection`: one connected client, including its message history |
 | `Log.h/.cpp` | `logMessage()` writes to the terminal and the log file |
 
@@ -105,64 +109,31 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 
 ## Message protocol
 
-One **JSON object per line**, ending in `\n`. Every message has `"command"` and `"requestId"`.
+**Full spec with every command, field and error code: [PROTOCOL.md](PROTOCOL.md).**
 
-### requestId rules
-- **Clients** must send a positive whole number (1, 2, 3, …), usually a counter.
-- **Replies** copy the request's `requestId`, so the client can match them up.
-- **Server-initiated messages** (broadcasts) use **negative** ids (-1, -2, …).
-- **0** means "unknown". The server uses it when replying to a message with no readable id.
+The short version:
+- One JSON object per line, flat fields, and every message has `command` + `requestId` (lowercase d).
+- Replies are `<command>_result` with `requestId` (echoed), `success`, `error`, and `message`.
+- `error` is `""` on success, or a code from `ErrorCodes.h` on failure. Clients should branch on `error`, not on `message`.
+- Server-initiated messages use negative requestIds. Replies to unreadable messages use 0.
 
-### Client → server
-
-| Command | Fields | Reply command |
+| Command | Fields | Possible `error` codes |
 |---|---|---|
-| `register` | `username`, `email`, `password`, `pin` | `register_result` |
-| `login` | `username`, `password` | `login_result` |
-| `logout` | _(none)_ | `logout_result` |
-| `recover_password` | `username`, `email`, `pin`, `newPassword` | `recover_password_result` |
-
-### Server → client
-
-| Command | Fields | When |
-|---|---|---|
-| `<command>_result` | `requestId`, `success`, `message` (+ extras below) | Reply to every command |
-| ↳ `register_result` extras | `playerId` | On success |
-| ↳ `login_result` extras | `playerId`, `username` | On success |
-| `server_message` | `requestId` (negative), `text` | Someone typed in the server console |
-| `error` | `requestId`, `message` | Invalid JSON, a bad or missing requestId, or an unknown command |
-
-### Examples
-```
-> {"command":"register","requestId":1,"username":"alice","email":"alice@example.com","password":"pw","pin":"0042"}
-< {"command":"register_result","message":"account created, you can now log in","playerId":1,"requestId":1,"success":true}
-
-> {"command":"login","requestId":2,"username":"alice","password":"pw"}
-< {"command":"login_result","message":"welcome alice","playerId":1,"requestId":2,"success":true,"username":"alice"}
-
-> {"command":"recover_password","requestId":3,"username":"alice","email":"alice@example.com","pin":"0042","newPassword":"new"}
-< {"command":"recover_password_result","message":"password changed, you can now log in","requestId":3,"success":true}
-
-< {"command":"server_message","requestId":-1,"text":"game starts soon"}
-
-> {"command":"login","username":"alice","password":"pw"}
-< {"command":"error","message":"every message needs a \"requestId\" that is a positive whole number","requestId":0}
-```
-
-### Rules
-- **Pin:** a **string** of 4–8 digits (`"0042"`, not `42`), so leading zeros aren't lost. Limits are in `Server.cpp`.
-- **Email:** must look like `x@y.z`. It's stored lowercase, and recovery compares it case-insensitively.
-- **Register** does **not** log you in. Send `login` afterward.
-- **One login per account:** only one connection can be logged in to an account at a time.
-- **Login failures:** a wrong password and an unknown username both return `"wrong username or password"`.
-- **Recovery failures:** a wrong username, email, or pin all return the same message.
-- **JSON key order** in replies is alphabetical. Read fields by name.
+| `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
+| `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
+| `logout` | _(none)_ | `NOT_LOGGED_IN` |
+| `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `SERVER_ERROR` |
+| _(server)_ `error` | `error`, `message` | `INVALID_JSON`, `MISSING_REQUEST_ID`, `UNKNOWN_COMMAND` |
+| _(server)_ `server_message` | `text` | — |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
-2. Implement it in `Server.cpp`: read from `request.body`, then call `replyResult(conn, request, success, "text", {extras})`.
+2. Implement it in `Server.cpp`: read from `request.body`, then call
+   `replyOk(conn, request, "text", {extras})` or `replyFail(conn, request, ErrorCode::Xxx, "text")`.
 3. Add `m_handlers["xxx"] = &Server::handleXxx;` in `registerHandlers()`.
-4. If it has a secret field, add the field name to `redactSecrets()` in `Message.h`.
+4. Add any new error codes to `ErrorCodes.h`.
+5. If it has a secret field, add the field name to `redactSecrets()` in `Message.h`.
+6. Document it in `PROTOCOL.md`, and add tests to `TESTING.md`.
 
 ---
 
@@ -222,7 +193,9 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 
 ## Known issues / TODO
 
-- [ ] Clients need updating to the new protocol (`requestId`, the new register fields, JSON replies).
+- [ ] Client sends `"recoverPassword"` with only `pin` plus username **or** email; the server expects `"recover_password"` with username, email, pin, and `newPassword`.
+- [ ] Team Google Doc still shows `requestID` + `data`; paste in the sections from `PROTOCOL.md`.
+- [ ] Failed-login counting and lockout, with `failed_attempts` in `login_result` (issue #54).
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] Emails aren't unique, and there's no email verification.
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
@@ -232,6 +205,13 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 ---
 
 ## Change log
+
+### 2026-11-19 — Error codes + logout (issue #59)
+- Every `*_result` now has an `error` field: `""` on success, a code on failure. `success` is derived from it.
+- The standalone `error` message now carries a code too (`INVALID_JSON`, `MISSING_REQUEST_ID`, `UNKNOWN_COMMAND`).
+- New `ErrorCodes.h` lists every code. Handlers use `replyOk` / `replyFail`.
+- Logout uses `NOT_LOGGED_IN`, and its client-side behavior is documented.
+- New `PROTOCOL.md`: the full protocol, ready to paste into the team Google Doc.
 
 ### 2026-11-16 — Hashing, requestId, recovery, logging
 - Passwords and pins are stored as salted SHA-256 (`PasswordHasher`).
