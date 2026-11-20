@@ -12,6 +12,7 @@ qt_standard_project_setup()
 
 qt_add_executable(test_server
     main.cpp
+    ErrorCodes.h
     Log.h            Log.cpp
     Message.h
     Connection.h

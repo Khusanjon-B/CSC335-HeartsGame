@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 
 #include "Server.h"
+#include "ErrorCodes.h"
 #include "Log.h"
 #include "PasswordHasher.h"
 
@@ -210,9 +211,10 @@ void Server::processLine(Connection& conn, const QByteArray& line)
         // We can't read a requestId from broken JSON, so the reply uses 0.
         // The raw text is logged (cut to 200 chars) to help debug clients.
         logMessage(conn.label() + "  >  [unreadable] " + QString::fromUtf8(line.left(200)));
-        sendError(conn, 0, parseError.error != QJsonParseError::NoError
-                               ? "invalid JSON: " + parseError.errorString()
-                               : "message must be a JSON object");
+        sendError(conn, 0, ErrorCode::InvalidJson,
+                  parseError.error != QJsonParseError::NoError
+                      ? "invalid JSON: " + parseError.errorString()
+                      : "message must be a JSON object");
         return;
     }
 
@@ -223,14 +225,16 @@ void Server::processLine(Connection& conn, const QByteArray& line)
 
     // 3. Every client message needs a positive whole-number requestId.
     if (request.requestId <= 0) {
-        sendError(conn, 0, "every message needs a \"requestId\" that is a positive whole number");
+        sendError(conn, 0, ErrorCode::MissingRequestId,
+                  "every message needs a \"requestId\" that is a positive whole number");
         return;
     }
 
     // 4. Find the handler for this command and call it.
     const auto it = m_handlers.constFind(request.command);
     if (it == m_handlers.constEnd()) {
-        sendError(conn, request.requestId, "unknown command: \"" + request.command + "\"");
+        sendError(conn, request.requestId, ErrorCode::UnknownCommand,
+                  "unknown command: \"" + request.command + "\"");
         return;
     }
 
@@ -249,26 +253,27 @@ void Server::handleRegister(Connection& conn, const Message& request)
     const QString pin      = b.value("pin").toString();
 
     if (username.isEmpty() || email.isEmpty() || password.isEmpty() || pin.isEmpty())
-        return replyResult(conn, request, false, "username, email, password and pin are all required");
+        return replyFail(conn, request, ErrorCode::MissingFields,
+                         "username, email, password and pin are all required");
     if (!looksLikeEmail(email))
-        return replyResult(conn, request, false, "that email address doesn't look valid");
+        return replyFail(conn, request, ErrorCode::InvalidEmail,
+                         "that email address doesn't look valid");
     if (!isValidPin(pin))
-        return replyResult(conn, request, false,
-                           QString("pin must be a string of %1-%2 digits").arg(kMinPinLength).arg(kMaxPinLength));
+        return replyFail(conn, request, ErrorCode::InvalidPin,
+                         QString("pin must be a string of %1-%2 digits").arg(kMinPinLength).arg(kMaxPinLength));
     if (m_db.findPlayer(username))
-        return replyResult(conn, request, false, "username already taken");
+        return replyFail(conn, request, ErrorCode::InvalidCredentials, "username already taken");
 
     // Hash both secrets (each gets its own random salt) and save.
     const int newId = m_db.createPlayer(username, email,
                                         PasswordHasher::hash(password),
                                         PasswordHasher::hash(pin));
     if (newId < 0)
-        return replyResult(conn, request, false, "could not create account");
+        return replyFail(conn, request, ErrorCode::ServerError, "could not create account");
 
     // Registering doesn't log you in. The client sends "login" next.
     logMessage("[Auth] registered \"" + username + "\" as player " + QString::number(newId));
-    replyResult(conn, request, true, "account created, you can now log in",
-                {{"playerId", newId}});
+    replyOk(conn, request, "account created, you can now log in", {{"playerId", newId}});
 }
 
 void Server::handleLogin(Connection& conn, const Message& request)
@@ -277,9 +282,11 @@ void Server::handleLogin(Connection& conn, const Message& request)
     const QString password = request.body.value("password").toString();
 
     if (conn.verified)
-        return replyResult(conn, request, false, "already logged in as " + conn.username);
+        return replyFail(conn, request, ErrorCode::AlreadyLoggedIn,
+                         "already logged in as " + conn.username);
     if (username.isEmpty() || password.isEmpty())
-        return replyResult(conn, request, false, "username and password are required");
+        return replyFail(conn, request, ErrorCode::MissingFields,
+                         "username and password are required");
 
     // Hash what they typed with the stored salt and compare to the stored hash.
     // Same message for "no such user" and "wrong password", so nobody can
@@ -287,13 +294,13 @@ void Server::handleLogin(Connection& conn, const Message& request)
     const std::optional<PlayerRecord> player = m_db.findPlayer(username);
     if (!player || !PasswordHasher::verify(password, player->passwordHash, player->passwordSalt)) {
         logMessage("[Auth] login failed for " + conn.label() + " as \"" + username + "\"");
-        return replyResult(conn, request, false, "wrong username or password");
+        return replyFail(conn, request, ErrorCode::InvalidCredentials, "wrong username or password");
     }
 
     // One login per account at a time.
     if (findConnectionByPlayer(player->id))
-        return replyResult(conn, request, false,
-                           "this account is already logged in from another connection");
+        return replyFail(conn, request, ErrorCode::AccountInUse,
+                         "this account is already logged in from another connection");
 
     // Success: attach the player to this connection, then update the DB.
     conn.playerId = player->id;
@@ -303,18 +310,31 @@ void Server::handleLogin(Connection& conn, const Message& request)
 
     logMessage("[Auth] " + conn.ip + " logged in as \"" + conn.username +
                "\" (player " + QString::number(player->id) + ")");
-    replyResult(conn, request, true, "welcome " + conn.username,
-                {{"playerId", player->id}, {"username", conn.username}});
+    replyOk(conn, request, "welcome " + conn.username,
+            {{"playerId", player->id}, {"username", conn.username}});
 }
 
+// LOGOUT (issue #59)
+//   client:  {"command":"logout","requestId":N}
+//   server:  {"command":"logout_result","requestId":N,"success":true,"error":"","message":"logged out"}
+//
+// Logging out ends the player's session but keeps the TCP connection open,
+// so the client can show the login screen and log in again (as anyone)
+// without reconnecting.
+//
+// If the connection isn't logged in, the reply is success:false with
+// NOT_LOGGED_IN. Either way, after this reply the server considers the
+// connection logged out, so the client can safely switch to its logged-out
+// screen on any logout_result. (The use case asks that the client never be
+// left falsely showing an authenticated session.)
 void Server::handleLogout(Connection& conn, const Message& request)
 {
     if (!conn.verified)
-        return replyResult(conn, request, false, "you are not logged in");
+        return replyFail(conn, request, ErrorCode::NotLoggedIn, "you are not logged in");
 
     logMessage("[Auth] \"" + conn.username + "\" logged out");
-    logoutConnection(conn);
-    replyResult(conn, request, true, "logged out");
+    logoutConnection(conn);   // clears playerId/username/verified + DB: connected=0, last_logged_out=now
+    replyOk(conn, request, "logged out");
 }
 
 void Server::handleRecoverPassword(Connection& conn, const Message& request)
@@ -326,8 +346,8 @@ void Server::handleRecoverPassword(Connection& conn, const Message& request)
     const QString newPassword = b.value("newPassword").toString();
 
     if (username.isEmpty() || email.isEmpty() || pin.isEmpty() || newPassword.isEmpty())
-        return replyResult(conn, request, false,
-                           "username, email, pin and newPassword are all required");
+        return replyFail(conn, request, ErrorCode::MissingFields,
+                         "username, email, pin and newPassword are all required");
 
     // All three (username, email, pin) must match. One shared failure
     // message, so nobody can tell which part was wrong.
@@ -335,15 +355,16 @@ void Server::handleRecoverPassword(Connection& conn, const Message& request)
     if (!player || player->email != email ||
         !PasswordHasher::verify(pin, player->pinHash, player->pinSalt)) {
         logMessage("[Auth] password recovery failed for \"" + username + "\" from " + conn.label());
-        return replyResult(conn, request, false, "those recovery details don't match our records");
+        return replyFail(conn, request, ErrorCode::RecoveryFailed,
+                         "those recovery details don't match our records");
     }
 
     // New password gets a new salt too.
     if (!m_db.updatePassword(player->id, PasswordHasher::hash(newPassword)))
-        return replyResult(conn, request, false, "could not update password");
+        return replyFail(conn, request, ErrorCode::ServerError, "could not update password");
 
     logMessage("[Auth] password reset for \"" + username + "\"");
-    replyResult(conn, request, true, "password changed, you can now log in");
+    replyOk(conn, request, "password changed, you can now log in");
 }
 
 // ===========================================================================
@@ -366,17 +387,33 @@ void Server::sendMessage(Connection& conn, const QString& command, qint64 reques
     conn.socket->write(data);
 }
 
-void Server::replyResult(Connection& conn, const Message& request, bool success,
+void Server::replyResult(Connection& conn, const Message& request, const QString& errorCode,
                          const QString& text, QJsonObject extra)
 {
-    extra["success"] = success;
+    // success is derived from the error code, so the two can never disagree:
+    // no error code means success.
+    extra["success"] = errorCode.isEmpty();
+    extra["error"]   = errorCode;   // "" on success
     extra["message"] = text;
     sendMessage(conn, request.command + "_result", request.requestId, extra);
 }
 
-void Server::sendError(Connection& conn, qint64 requestId, const QString& text)
+void Server::replyOk(Connection& conn, const Message& request, const QString& text,
+                     QJsonObject extra)
 {
-    sendMessage(conn, "error", requestId, {{"message", text}});
+    replyResult(conn, request, ErrorCode::None, text, extra);
+}
+
+void Server::replyFail(Connection& conn, const Message& request, const QString& errorCode,
+                       const QString& text)
+{
+    replyResult(conn, request, errorCode, text, {});
+}
+
+void Server::sendError(Connection& conn, qint64 requestId, const QString& errorCode,
+                       const QString& text)
+{
+    sendMessage(conn, "error", requestId, {{"error", errorCode}, {"message", text}});
 }
 
 void Server::broadcast(const QString& text)
