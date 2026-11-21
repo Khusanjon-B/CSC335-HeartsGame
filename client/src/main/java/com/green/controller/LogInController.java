@@ -1,6 +1,7 @@
 package com.green.controller;
 
 import com.green.RequestManager;
+import com.green.Player;
 
 import javafx.fxml.FXML;
 import javafx.scene.control.TextField;
@@ -23,6 +24,7 @@ public class LogInController extends Controller{
         RequestManager.requestLogin(usernameField.getText(), passwordField.getText(), response ->
             runOnUiThread(() -> {
                 if (responseSucceeded(response)) {
+                    Player.setupPlayer(response.get("playerId").getAsInt(), usernameField.getText());
                     app.loadPage("mainMenu.fxml");
                 } else {
                     errorMessage.setText(responseError(response, "Login failed."));

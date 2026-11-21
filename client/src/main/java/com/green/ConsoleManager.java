@@ -10,10 +10,16 @@ public class ConsoleManager
 
         while (true)
         {
+            Player currentPlayer = Player.getCurrentPlayer();
+            if (currentPlayer != null)
+            {
+                System.out.println("Logged in as: " + currentPlayer.getUsername());
+            }
             System.out.println("1. Login");
             System.out.println("2. Create Account");
             System.out.println("3. Exit");
             System.out.println("4. Recover Password");
+            System.out.println("5. Logout");
 
             System.out.print("Enter your choice: ");
 
@@ -35,11 +41,38 @@ public class ConsoleManager
                     System.out.println("Recover Password selected");
                     recoverPassword();
                     break;
+                case "5":
+                    logout();
+                    break;
                 default:
                     System.out.println("Invalid choice, try again");
                     break;
             }
         }
+    }
+    private void logout()
+    {
+        if (Player.getCurrentPlayer() == null)
+        {
+            System.out.println("No player is currently logged in.");
+            return;
+        }
+
+        RequestManager.requestLogout(response ->
+            {
+                if (response.has("success") && response.get("success").getAsBoolean())
+                {
+                    Player.resetPlayer();
+                    System.out.println("Logout successful");
+                }
+                else
+                {
+                    String error = response.has("error")
+                        ? response.get("error").getAsString() : "Unknown error";
+                    System.out.println("Logout failed: " + error);
+                }
+            }
+        );
     }
     private void login()
     {
@@ -51,14 +84,14 @@ public class ConsoleManager
 
         try
         {
-            String message = MessageFormatter.login(username, password);
-            RequestManager.sendRequest(message, response -> 
+            RequestManager.requestLogin(username, password, response ->
                 {
                     boolean success = response.get("success").getAsBoolean();
 
                     if (success)
                     {
                         System.out.println("Login successful");
+                        Player.setupPlayer(response.get("playerId").getAsInt(), username);
                     }
                     else
                     {
@@ -99,8 +132,7 @@ public class ConsoleManager
 
         try
         {
-            String message = MessageFormatter.createAccount(email, username, password, pin);
-            RequestManager.sendRequest(message, response -> 
+            RequestManager.requestAccountCreation(email, username, password, pin, response ->
                 {
                     boolean success = response.get("success").getAsBoolean();
 
@@ -143,8 +175,7 @@ public class ConsoleManager
 
         try
         {
-            String message = MessageFormatter.recoverPassword(username, email, pin, newPassword);
-            RequestManager.sendRequest(message, response -> 
+            RequestManager.requestPasswordRecovery(username, email, pin, newPassword, response ->
                 {
                     boolean success = response.get("success").getAsBoolean();
 
