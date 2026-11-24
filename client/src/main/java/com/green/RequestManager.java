@@ -7,9 +7,9 @@ import java.util.function.Consumer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-public class RequestManager 
+public class RequestManager
 {
-    private static final ConcurrentHashMap<Integer, Consumer<JsonObject>> 
+    private static final ConcurrentHashMap<Integer, Consumer<JsonObject>>
     pendingRequests = new ConcurrentHashMap<>();
 
     private static final AtomicInteger nextRequestId = new AtomicInteger(1);
@@ -31,6 +31,20 @@ public class RequestManager
             System.out.println("No pending request found for requestId: " + requestId);
         }
     }
+
+    public static void failPendingRequests(String message)
+    {
+        for (Consumer<JsonObject> callback : pendingRequests.values())
+        {
+            JsonObject response = new JsonObject();
+            response.addProperty("success", false);
+            response.addProperty("error", "CONNECTION_LOST");
+            response.addProperty("message", message);
+            callback.accept(response);
+        }
+        pendingRequests.clear();
+    }
+
     public static void sendRequest(String message, Consumer<JsonObject> callback)
     {
         JsonObject json = JsonParser.parseString(message).getAsJsonObject();
@@ -41,5 +55,25 @@ public class RequestManager
 
         MessageBridge.getOutQueue().offer(json.toString());
 
+    }
+
+    public static void requestLogin(String username, String password, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.login(username, password), callback);
+    }
+
+    public static void requestAccountCreation(String email, String username, String password,String pin, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.createAccount(email, username, password, pin), callback);
+    }
+
+    public static void requestPasswordRecovery(String username, String email, String pin, String newPassword, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.recoverPassword(username, email, pin, newPassword), callback);
+    }
+
+    public static void requestLogout(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.logout(), callback);
     }
 }

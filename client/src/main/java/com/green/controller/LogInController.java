@@ -1,10 +1,9 @@
 package com.green.controller;
 
-import com.green.MessageFormatter;
 import com.green.RequestManager;
+import com.green.Player;
 
 import javafx.fxml.FXML;
-import javafx.application.Platform;
 import javafx.scene.control.TextField;
 import javafx.scene.text.Text;
 
@@ -22,14 +21,11 @@ public class LogInController extends Controller{
             errorMessage.setText("Please fill in all fields.");
             return;
         }
-        RequestManager.sendRequest(
-            MessageFormatter.login(usernameField.getText(), passwordField.getText()),
-            response -> Platform.runLater(() -> {
-                boolean success = response.has("success") && response.get("success").getAsBoolean();
-                if (success) {
-                    errorMessage.setText(response.has("message")
-                        ? response.get("message").getAsString()
-                        : "Login successful.");
+        RequestManager.requestLogin(usernameField.getText(), passwordField.getText(), response ->
+            runOnUiThread(() -> {
+                if (responseSucceeded(response)) {
+                    Player.setupPlayer(response.get("playerId").getAsInt(), response.get("username").getAsString());
+                    app.loadPage("mainMenu.fxml");
                 } else {
                     String message = response.has("message")
                         ? response.get("message").getAsString()
