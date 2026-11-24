@@ -245,6 +245,7 @@ start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [
 - **Seats:** `players[0]` is the host (`playerNum` 1). The others are in join order. When someone leaves, the players after them move up.
 - **Leaving:** `leave_lobby`, `logout`, and **disconnecting** all go through `Server::leaveLobby()`, so they behave the same.
 - **Host leaves:** everyone gets `host_left` and is taken out of the lobby, and the `GameManager` is deleted (use case 10).
+  Nobody is logged out. The team confirmed (11-23) that use case 10's "logs out the user account" means **the game stops** and players get the option to leave it, not an account logout.
 - **Non-host leaves:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
 - **Starting:** only the host can start, and only with exactly 4 players. The lobby then closes to new players.
 - **Game limit:** `maxConcurrentGames` in `server.ini` (default 1). A new `start_lobby` past the limit gets `COULD_NOT_CREATE_LOBBY`.
@@ -318,7 +319,6 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
 - [ ] Table setup, dealing and passing, tricks, scoring, game end, play again (#71, #70, #66, #69, #68, #67)
 - [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
-- [ ] Use case 10 says the host's account is also logged out when they leave; the server doesn't do this yet (it seems unintended, so please confirm)
 
 ---
 
