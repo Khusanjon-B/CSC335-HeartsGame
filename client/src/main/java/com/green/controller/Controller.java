@@ -31,10 +31,10 @@ public class Controller {
     }
 
     protected String responseError(JsonObject response, String fallback) {
-        if (response.has("error")
-                && response.get("error").isJsonPrimitive()
-                && response.getAsJsonPrimitive("error").isString()) {
-            String error = response.get("error").getAsString();
+        if (response.has("message")
+                && response.get("message").isJsonPrimitive()
+                && response.getAsJsonPrimitive("message").isString()) {
+            String error = response.get("message").getAsString();
             if (!error.isBlank()) {
                 return error;
             }
