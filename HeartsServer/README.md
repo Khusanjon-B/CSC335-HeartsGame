@@ -35,6 +35,7 @@ accounts, and unlock them. Players can create, list, join, and leave lobbies, an
 | ↳ View connected user count (#72) | ✅ |
 | ↳ View locked-out users + unlock (#73, UC 7.2) | ✅ |
 | ↳ View registered user count (#74) | ✅ |
+| ↳ View Hearts Games (lobbies and running games) | ✅ |
 | Game sessions: start / list / join / leave lobby, host starts game (#64) | ✅ Working (tested) |
 | Host leaving disbands the lobby (#63) | ✅ Working (tested) |
 | Max concurrent games (`server.ini`, default 1) | ✅ Working (tested) |
@@ -46,7 +47,7 @@ accounts, and unlock them. Players can create, list, join, and leave lobbies, an
 
 - **Qt:** 6.11.1, MinGW 64-bit (needs the `Core`, `Network`, `Sql`, and `Widgets` modules)
 - **Build:** open `CMakeLists.txt` in Qt Creator and run it
-- **Executable:** `test_server [port]`, default port **5000**
+- **Executable:** `test_server [port]`. The port comes from `server.ini` (default **5000**); one on the command line overrides it.
 - **Files the server creates next to the `.exe`** (inside `build/`, which git ignores):
   - `hearts.db`: the database. Delete it to start over.
   - `server.ini`: settings (see [Config file](#config-file-serverini)). Created with defaults on first run.
@@ -109,8 +110,9 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 ### Connection lifecycle
 1. Client connects → a `Connection` is added to `m_connections` (anonymous, `verified = false`).
 2. `login` succeeds → `playerId`, `username`, and `verified` are filled in, and the DB row is marked connected.
-3. `logout` → the fields are cleared and the DB row is marked disconnected. The socket stays open.
-4. Socket disconnects → the server logs them out if needed and removes them from `m_connections`.
+3. `start_lobby` / `join_lobby` → `lobbyId` is set. `leave_lobby` clears it (see [Game sessions](#game-sessions-and-lobbies-64-63--use-cases-811)).
+4. `logout` → they leave any lobby, the login fields are cleared, and the DB row is marked disconnected. The socket stays open.
+5. Socket disconnects → same as logout (including leaving the lobby), then they're removed from `m_connections`.
 
 ### `struct Connection`
 | Field | Type | Meaning |
@@ -120,6 +122,7 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 | `playerId` | `std::optional<int>` | DB `player_id`, empty until login |
 | `username` | `QString` | Empty until login |
 | `verified` | `bool` | `true` once logged in |
+| `lobbyId` | `std::optional<int>` | The lobby/game they're in; empty on the home screen |
 | `history` | `std::deque<Message>` | Last `kMaxHistory` (100) messages in both directions, secrets redacted |
 
 ### `struct Message`
@@ -145,12 +148,20 @@ The short version:
 
 | Command | Fields | Possible `error` codes |
 |---|---|---|
-| `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
+| `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_USERNAME`, `INVALID_PASSWORD`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
 | `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ACCOUNT_LOCKED`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
 | `logout` | _(none)_ | `NOT_LOGGED_IN` |
-| `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `SERVER_ERROR` |
+| `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `ACCOUNT_IN_USE`, `INVALID_PASSWORD`, `SERVER_ERROR` |
+| `start_lobby` | _(none)_ | `NOT_LOGGED_IN`, `ALREADY_IN_LOBBY`, `COULD_NOT_CREATE_LOBBY` |
+| `get_lobbies` | _(none)_ | `NOT_LOGGED_IN` |
+| `join_lobby` | `lobbyId` | `NOT_LOGGED_IN`, `MISSING_FIELDS`, `LOBBY_NOT_FOUND`, `LOBBY_FULL`, `GAME_ALREADY_STARTED`, `ALREADY_IN_LOBBY` |
+| `leave_lobby` | _(none)_ | `NOT_LOGGED_IN`, `NOT_IN_LOBBY` |
+| `start_game` | _(none)_ | `NOT_LOGGED_IN`, `NOT_IN_LOBBY`, `NOT_HOST`, `LOBBY_NOT_FULL`, `GAME_ALREADY_STARTED` |
 | _(server)_ `error` | `error`, `message` | `INVALID_JSON`, `MISSING_REQUEST_ID`, `UNKNOWN_COMMAND` |
 | _(server)_ `server_message` | `text` | — |
+| _(server)_ `player_joined` / `player_left` | `lobbyId`, `username`, `players` | — |
+| _(server)_ `host_left` | `lobbyId`, `username`, `message` | — |
+| _(server)_ `game_started` | `lobbyId`, `players` | — |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -245,7 +256,6 @@ start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [
 - **Seats:** `players[0]` is the host (`playerNum` 1). The others are in join order. When someone leaves, the players after them move up.
 - **Leaving:** `leave_lobby`, `logout`, and **disconnecting** all go through `Server::leaveLobby()`, so they behave the same.
 - **Host leaves:** everyone gets `host_left` and is taken out of the lobby, and the `GameManager` is deleted (use case 10).
-  Nobody is logged out. The team confirmed (11-23) that use case 10's "logs out the user account" means **the game stops** and players get the option to leave it, not an account logout.
 - **Non-host leaves:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
 - **Starting:** only the host can start, and only with exactly 4 players. The lobby then closes to new players.
 - **Game limit:** `maxConcurrentGames` in `server.ini` (default 1). A new `start_lobby` past the limit gets `COULD_NOT_CREATE_LOBBY`.

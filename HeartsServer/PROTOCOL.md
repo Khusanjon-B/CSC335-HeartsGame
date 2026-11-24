@@ -337,9 +337,8 @@ Once a game starts, its lobby closes. It disappears from `get_lobbies`, and `joi
 {"command": "player_joined", "requestId": -3, "lobbyId": 1, "username": "dave", "players": ["alice", "bob", "carol", "dave"]}
 {"command": "host_left", "requestId": -8, "lobbyId": 1, "username": "alice", "message": "The host left, so the game was disbanded."}
 ```
-**Client note for `host_left`:** stop the game and show a popup ("The host left…") whose button takes the
-player back to the home screen (use case 10). The player stays **logged in**. The server has already taken
-them out of the lobby, so they can create or join another one right away.
+**Client note for `host_left`:** stop the game, show the "host left" popup, and go back to the home screen.
+The server has already taken you out of the lobby.
 
 > **Not built yet:** the table itself (seats, scores 0, cards) is issue #71 onward and will start right after
 > `game_started`. If a player disconnects **during** a game, the others get `player_left`. Test case 19.2
