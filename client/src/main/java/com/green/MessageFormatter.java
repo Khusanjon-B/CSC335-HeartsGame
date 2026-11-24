@@ -110,4 +110,11 @@ public class MessageFormatter
         json.addProperty("command", "leave_lobby");
         return json.toString();
     }
+
+    public static String startGame()
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "start_game");
+        return json.toString();
+    }
 }

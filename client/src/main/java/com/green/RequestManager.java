@@ -96,4 +96,9 @@ public class RequestManager
     {
         sendRequest(MessageFormatter.leaveLobby(), callback);
     }
+
+    public static void requestStartGame(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.startGame(), callback);
+    }
 }

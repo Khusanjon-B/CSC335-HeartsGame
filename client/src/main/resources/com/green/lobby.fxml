@@ -29,6 +29,7 @@
             <HBox alignment="CENTER_RIGHT">
                <children>
                   <Button fx:id="leaveButton" onAction="#leaveLobby" text="Leave Lobby" />
+                  <Button fx:id="startGameButton" onAction="#startGame" text="Start Game" />
                </children>
             </HBox>
          </children>

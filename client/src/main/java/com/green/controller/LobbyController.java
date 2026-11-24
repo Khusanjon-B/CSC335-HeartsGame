@@ -20,9 +20,13 @@ public class LobbyController extends Controller {
     private ListView<String> playerList;
     @FXML
     private Button leaveButton;
+    @FXML
+    private Button startGameButton;
 
     private Player player;
     private boolean leaveInProgress;
+    private boolean startInProgress;
+    private boolean gamePageLoaded;
 
     @Override
     public void setApp(com.green.App app) {
@@ -35,17 +39,17 @@ public class LobbyController extends Controller {
         renderPlayers();
         lobbyTitle.setText("Lobby " + player.getLobbyId()
             + " - hosted by " + player.getLobbyHost());
-        lobbyStatus.setText("Waiting for players...");
+        updateLobbyControls();
         MessageHandler.setLobbyEventHandler(this::handleLobbyEvent);
     }
 
     @FXML
     private void leaveLobby() {
-        if (leaveInProgress) {
+        if (leaveInProgress || startInProgress) {
             return;
         }
         leaveInProgress = true;
-        leaveButton.setDisable(true);
+        updateLobbyControls();
         lobbyStatus.setText("Leaving lobby...");
         RequestManager.requestLeaveLobby(response -> runOnUiThread(() -> {
             if (responseSucceeded(response)
@@ -58,8 +62,28 @@ public class LobbyController extends Controller {
                 app.loadPage("lobbyBrowser.fxml");
             } else {
                 leaveInProgress = false;
-                leaveButton.setDisable(false);
+                updateLobbyControls();
                 lobbyStatus.setText(responseError(response, "Could not leave lobby."));
+            }
+        }));
+    }
+
+    @FXML
+    private void startGame() {
+        if (startInProgress || leaveInProgress || !player.isHost()
+                || player.getLobbyPlayers().size() < 4) {
+            return;
+        }
+        startInProgress = true;
+        updateLobbyControls();
+        lobbyStatus.setText("Starting game...");
+        RequestManager.requestStartGame(response -> runOnUiThread(() -> {
+            if (responseSucceeded(response)) {
+                showGamePage();
+            } else {
+                startInProgress = false;
+                updateLobbyControls();
+                lobbyStatus.setText(responseError(response, "Could not start game."));
             }
         }));
     }
@@ -84,13 +108,42 @@ public class LobbyController extends Controller {
                 }
                 player.setLobbyPlayers(players);
                 renderPlayers();
+                updateLobbyControls();
             }
             if ("game_started".equals(command)) {
-                lobbyStatus.setText("The game has started.");
+                showGamePage();
             } else {
-                lobbyStatus.setText("Waiting for players...");
+                updateLobbyStatus();
             }
         });
+    }
+
+    private void updateLobbyControls() {
+        boolean host = player.isHost();
+        startGameButton.setVisible(host);
+        startGameButton.setManaged(host);
+        startGameButton.setDisable(startInProgress || leaveInProgress
+            || player.getLobbyPlayers().size() < 4);
+        leaveButton.setDisable(leaveInProgress || startInProgress);
+        updateLobbyStatus();
+    }
+
+    private void updateLobbyStatus() {
+        if (player.getLobbyPlayers().size() < 4) {
+            lobbyStatus.setText("Waiting for players ("
+                + player.getLobbyPlayers().size() + "/4)...");
+        } else if (player.isHost()) {
+            lobbyStatus.setText("Lobby is full. Start the game when ready.");
+        } else {
+            lobbyStatus.setText("Lobby is full. Waiting for the host to start.");
+        }
+    }
+
+    private void showGamePage() {
+        if (!gamePageLoaded) {
+            gamePageLoaded = true;
+            app.loadPage("game.fxml");
+        }
     }
 
     private void renderPlayers() {
