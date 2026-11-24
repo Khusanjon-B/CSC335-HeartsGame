@@ -10,7 +10,11 @@ public class MainMenuController extends Controller {
     private void logout() {
         RequestManager.requestLogout(response ->
             runOnUiThread(() -> {
-                if (responseSucceeded(response)) {
+                if (responseSucceeded(response)
+                        || (response.has("error")
+                            && response.get("error").isJsonPrimitive()
+                            && response.getAsJsonPrimitive("error").isString()
+                            && "NOT_LOGGED_IN".equals(response.get("error").getAsString()))) {
                     Player.resetPlayer();
                     app.loadPage("login.fxml");
                 } else {
