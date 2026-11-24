@@ -27,7 +27,17 @@ public class LogInController extends Controller{
                     Player.setupPlayer(response.get("playerId").getAsInt(), response.get("username").getAsString());
                     app.loadPage("mainMenu.fxml");
                 } else {
-                    errorMessage.setText(responseError(response, "Login failed."));
+                    String message = response.has("message")
+                        ? response.get("message").getAsString()
+                        : "Login failed.";
+                    if (response.has("failed_attempts")) {
+                        int failedAttempts = response.get("failed_attempts").getAsInt();
+                        message += " Attempt " + failedAttempts + " of 3.";
+                        if (failedAttempts >= 3) {
+                            message += " Account locked.";
+                        }
+                    }
+                    errorMessage.setText(message);
                 }
             })
         );

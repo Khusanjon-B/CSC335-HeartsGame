@@ -4,7 +4,7 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-16 (covers: connections, protocol, register, login/logout,
+_Last updated: 2026-11-19 (covers: connections, protocol, error codes, register, login/logout,
 password recovery, hashing, history, logging, console, DB schema)_
 
 ---
@@ -67,34 +67,36 @@ add a note under [Failures](#failures).
 
 | ID | Send | Expected reply | Result |
 |---|---|---|---|
-| B1 | `hello` | `{"command":"error","message":"invalid JSON: ...","requestId":0}` | |
-| B2 | `[1,2,3]` | `error`, `"message must be a JSON object"`, requestId 0 | |
-| B3 | `{"command":"login","username":"a","password":"b"}` (no requestId) | `error` "needs a requestId...", requestId 0 | |
+| B1 | `hello` | `{"command":"error","error":"INVALID_JSON","message":"invalid JSON: ...","requestId":0}` | |
+| B2 | `[1,2,3]` | `error`, code `INVALID_JSON`, `"message must be a JSON object"`, requestId 0 | |
+| B3 | `{"command":"login","username":"a","password":"b"}` (no requestId) | `error`, code `MISSING_REQUEST_ID`, requestId 0 | |
 | B4 | `{"command":"login","requestId":0}` | Same as B3 | |
 | B5 | `{"command":"login","requestId":-3}` | Same as B3 | |
 | B6 | `{"command":"login","requestId":1.5}` | Same as B3 | |
 | B7 | `{"command":"login","requestId":"7"}` (string id) | Same as B3 | |
-| B8 | `{"command":"dance","requestId":8}` | `error` `unknown command: "dance"`, **requestId 8** | |
+| B8 | `{"command":"dance","requestId":8}` | `error`, code `UNKNOWN_COMMAND`, **requestId 8** | |
 | B9 | Paste two valid messages (two lines) at once | Both get replies, in order | |
 | B10 | Any valid request | Reply has the **same requestId** you sent | |
+| B11 | Any request that succeeds | Reply has `"success":true` **and** `"error":""` | |
+| B12 | Any request that fails | Reply has `"success":false` **and** a non-empty `"error"` code | |
 
 ## C. Register
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
-| C1 | `{"command":"register","requestId":1,"username":"alice","email":"alice@example.com","password":"pw","pin":"0042"}` | `register_result`, success true, `playerId` 1 | |
-| C2 | Repeat C1 exactly | success false, `username already taken` | |
-| C3 | Register with `"email"` missing | success false, `...are all required` | |
-| C4 | Register with `"pin"` missing | success false, `...are all required` | |
-| C5 | `"email":"not-an-email"` | success false, `email address doesn't look valid` | |
-| C6 | `"pin":"12"` (too short) | success false, `pin must be a string of 4-8 digits` | |
+| C1 | `{"command":"register","requestId":1,"username":"alice","email":"alice@example.com","password":"pw","pin":"0042"}` | `register_result`, success true, error `""`, `playerId` 1 | |
+| C2 | Repeat C1 exactly | success false, `INVALID_CREDENTIALS`, `username already taken` | |
+| C3 | Register with `"email"` missing | success false, `MISSING_FIELDS` | |
+| C4 | Register with `"pin"` missing | success false, `MISSING_FIELDS` | |
+| C5 | `"email":"not-an-email"` | success false, `INVALID_EMAIL` | |
+| C6 | `"pin":"12"` (too short) | success false, `INVALID_PIN` | |
 | C7 | `"pin":"123456789"` (too long) | Same as C6 | |
 | C8 | `"pin":"12a4"` | Same as C6 | |
-| C9 | `"pin":1234` (number, not string) | success false, `...are all required` | |
+| C9 | `"pin":1234` (number, not string) | success false, `MISSING_FIELDS` | |
 | C10 | Register `bob` with `"email":"Bob@Example.COM"` | success true; in the DB, email is `bob@example.com` | |
 | C11 | Check the DB after C1 | Row has a 64-char `password_hash`, 32-char `password_salt`, `pin_hash`, `pin_salt`. **No plain "pw" or "0042" anywhere** | |
 | C12 | Register two users with the same password | Their `password_hash` values are **different** (different salts) | |
-| C13 | After registering, send `{"command":"logout","requestId":9}` | `you are not logged in` (registering doesn't log you in) | |
+| C13 | After registering, send `{"command":"logout","requestId":9}` | `NOT_LOGGED_IN` (registering doesn't log you in) | |
 
 ## D. Login and logout
 
@@ -102,18 +104,21 @@ _Needs `alice` / `pw` from C1._
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
-| D1 | `{"command":"login","requestId":1,"username":"alice","password":"wrong"}` | success false, `wrong username or password` | |
-| D2 | Login as `nobody` | **Same** message as D1 | |
-| D3 | Login with an empty password | `username and password are required` | |
-| D4 | Login as alice / pw | success true, `playerId`, `username` | |
+| D1 | `{"command":"login","requestId":1,"username":"alice","password":"wrong"}` | success false, `INVALID_CREDENTIALS` | |
+| D2 | Login as `nobody` | **Same** code and message as D1 | |
+| D3 | Login with an empty password | `MISSING_FIELDS` | |
+| D4 | Login as alice / pw | success true, error `""`, `playerId`, `username` | |
 | D5 | Check the DB after D4 | alice: `connected` = 1, `last_logged_in` = now | |
-| D6 | Log in again on the same connection | `already logged in as alice` | |
-| D7 | In a **second** `send.py`, log in as alice | `already logged in from another connection` | |
-| D8 | First client: `{"command":"logout","requestId":5}` | success true, `logged out` | |
+| D6 | Log in again on the same connection | `ALREADY_LOGGED_IN` | |
+| D7 | In a **second** `send.py`, log in as alice | `ACCOUNT_IN_USE` | |
+| D8 | First client: `{"command":"logout","requestId":5}` | success true, error `""`, `logged out` | |
 | D9 | Check the DB after D8 | `connected` = 0, `last_logged_out` = now | |
 | D10 | Second client: log in as alice now | success true | |
 | D11 | Log in, then close `send.py` without logging out | Server logs disconnect with `(alice)`; DB `connected` = 0, `last_logged_out` set | |
 | D12 | Logged in as alice, a second client logs in as bob | Both succeed | |
+| D13 | Send `logout` twice in a row | 1st: success true. 2nd: success false, `NOT_LOGGED_IN` | |
+| D14 | Log out, then log in **on the same connection** (no reconnect) | Login succeeds; the connection stayed open after logout | |
+| D15 | Log out, then send a message that needs login (none exist yet; recheck when game commands are added) | Rejected with `NOT_LOGGED_IN` | |
 
 ## E. Password recovery
 
@@ -121,10 +126,10 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
-| E1 | `{"command":"recover_password","requestId":1,"username":"alice","email":"alice@example.com","pin":"9999","newPassword":"new"}` | success false, `those recovery details don't match our records` | |
-| E2 | Correct pin, wrong email | Same message as E1 | |
-| E3 | Unknown username | Same message as E1 | |
-| E4 | Missing `newPassword` | `...are all required` | |
+| E1 | `{"command":"recover_password","requestId":1,"username":"alice","email":"alice@example.com","pin":"9999","newPassword":"new"}` | success false, `RECOVERY_FAILED` | |
+| E2 | Correct pin, wrong email | Same code as E1 | |
+| E3 | Unknown username | Same code as E1 | |
+| E4 | Missing `newPassword` | `MISSING_FIELDS` | |
 | E5 | Correct username, email, pin `"0042"` | success true, `password changed` | |
 | E6 | Log in with the **old** password | `wrong username or password` | |
 | E7 | Log in with the **new** password | success true | |
@@ -176,3 +181,4 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 
 ## Change log
 - **2026-11-16:** First version. Sections A–H.
+- **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).

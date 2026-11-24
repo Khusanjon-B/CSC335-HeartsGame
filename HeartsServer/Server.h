@@ -3,11 +3,13 @@
 // Server.h - the TCP server: accepts clients, reads their JSON messages,
 // passes each one to the right handler, and sends replies.
 //
+// The full protocol is in PROTOCOL.md. Short version:
+//
 // MESSAGE FORMAT (both directions): one JSON object per line, ending in '\n'.
 // Every message has "command" and "requestId" (see Message.h for the id rules).
 //
 //   client -> server   {"command":"login","requestId":7,"username":"alice","password":"pw"}
-//   server -> client   {"command":"login_result","requestId":7,"success":true,
+//   server -> client   {"command":"login_result","requestId":7,"success":true,"error":"",
 //                       "message":"welcome alice","playerId":1,"username":"alice"}
 //
 // Commands:
@@ -15,16 +17,19 @@
 //   "login"             {username, password}                     -> "login_result"
 //   "logout"            {}                                       -> "logout_result"
 //   "recover_password"  {username, email, pin, newPassword}      -> "recover_password_result"
-// Every reply is the command name + "_result", with "success" and "message".
-// Problems with the message itself get {"command":"error", "requestId", "message"}.
+// Every reply is the command name + "_result", with "success", "error" and
+// "message". "error" is "" on success, or a code from ErrorCodes.h on failure.
+// Problems with the message itself get {"command":"error", "requestId", "error", "message"}.
 // Console broadcasts go out as {"command":"server_message", "requestId":<negative>, "text"}.
 //
 // HOW TO ADD A NEW COMMAND (for example "play_card"):
 //   1. Declare   void handlePlayCard(Connection& conn, const Message& request);
 //   2. Write it in Server.cpp: read fields from request.body, then call
-//      replyResult(conn, request, true/false, "text", {extra fields}).
+//        replyOk(conn, request, "text", {extra fields});         on success
+//        replyFail(conn, request, ErrorCode::Something, "text"); on failure
 //   3. Add one line in registerHandlers():
 //         m_handlers["play_card"] = &Server::handlePlayCard;
+//   4. Document it in PROTOCOL.md.
 // ---------------------------------------------------------------------------
 
 #include "Connection.h"
@@ -85,13 +90,22 @@ private:
     void sendMessage(Connection& conn, const QString& command, qint64 requestId,
                      QJsonObject fields = {});
 
-    // Reply to a request with "<command>_result", success, message, plus
-    // any extra fields. Used by all the handlers.
-    void replyResult(Connection& conn, const Message& request, bool success,
-                     const QString& text, QJsonObject extra = {});
+    // Replies to a request with "<command>_result". Every reply has:
+    //   success  true/false
+    //   error    "" on success, an ErrorCode on failure
+    //   message  human-readable text (for logs or display, not for logic)
+    // replyOk / replyFail are the two shortcuts handlers actually call.
+    void replyResult(Connection& conn, const Message& request, const QString& errorCode,
+                     const QString& text, QJsonObject extra);
+    void replyOk(Connection& conn, const Message& request, const QString& text,
+                 QJsonObject extra = {});
+    void replyFail(Connection& conn, const Message& request, const QString& errorCode,
+                   const QString& text);
 
-    // Shortcut for {"command":"error","requestId":id,"message":text}.
-    void sendError(Connection& conn, qint64 requestId, const QString& text);
+    // Sends {"command":"error","requestId":id,"error":code,"message":text}.
+    // Used when the message itself is broken, so there's no handler to reply.
+    void sendError(Connection& conn, qint64 requestId, const QString& errorCode,
+                   const QString& text);
 
     // ---- data ----
     Database&               m_db;

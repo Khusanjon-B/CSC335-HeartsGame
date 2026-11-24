@@ -95,9 +95,19 @@ public class ConsoleManager
                     }
                     else
                     {
-                        String error = response.has("error")
-                        ? response.get("error").getAsString() : "Unknown error";
+                        String error = response.has("message")
+                        ? response.get("message").getAsString()
+                        : response.has("error") ? response.get("error").getAsString() : "Unknown error";
                         System.out.println("Login failed: " + error);
+                        if (response.has("failed_attempts"))
+                        {
+                            int failedAttempts = response.get("failed_attempts").getAsInt();
+                            System.out.println("Failed attempt " + failedAttempts + " of 3.");
+                            if (failedAttempts >= 3)
+                            {
+                                System.out.println("Account locked.");
+                            }
+                        }
                     }
                 }
             );
