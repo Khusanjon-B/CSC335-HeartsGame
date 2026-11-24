@@ -8,7 +8,8 @@
 //   - a unique lobbyId
 //   - a Lobby (who's in it, host first)
 //   - a state: WaitingForPlayers -> InGame
-//   - later: a Table with the cards and scores (issue #71 onward)
+//   - a Table with the seats, cards and scores, created when the game
+//     starts (issues #71, #70)
 //
 //   start_lobby --> [WaitingForPlayers] --(4 players + host sends start_game)--> [InGame]
 //                         |    ^
@@ -16,13 +17,15 @@
 //
 // The GameManager only knows game rules and state. It never sends network
 // messages; the Server does that after asking the GameManager what changed.
-// That keeps this class easy to test and to extend with the Table later.
+// That keeps this class (and Table) easy to test on their own.
 // ---------------------------------------------------------------------------
 
 #include "Lobby.h"
+#include "Table.h"
 
 #include <QJsonObject>
 #include <QString>
+#include <memory>
 
 class GameManager
 {
@@ -54,17 +57,23 @@ public:
     bool removePlayer(int playerId);
 
     // Host asks to start. Needs a full lobby (4 players) and the WaitingForPlayers state.
+    // On success the Table is created (use case 16) and round 1 is dealt (use case 17).
     StartResult startGame(int requestingPlayerId);
+
+    // The table, once the game has started; nullptr while still in the lobby.
+    Table*       table() { return m_table.get(); }
+    const Table* table() const { return m_table.get(); }
 
     // Short description for get_lobbies and the monitor window:
     // {"lobbyId":1,"host":"alice","playerCount":3}
     QJsonObject summary() const;
 
-    // "Waiting for players" / "In game", for the monitor window.
+    // "Waiting for players" / "In game - round 1, passing left", for the monitor window.
     QString stateText() const;
 
 private:
     int   m_lobbyId;
     Lobby m_lobby;
     State m_state = State::WaitingForPlayers;
+    std::unique_ptr<Table> m_table;   // created by startGame()
 };

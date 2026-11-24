@@ -4,7 +4,7 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-23 (covers: lobbies/game sessions, connections, protocol, error codes, register, login/logout,
+_Last updated: 2026-11-23 (covers: dealing/passing, lobbies/game sessions, connections, protocol, error codes, register, login/logout,
 lockout, password recovery, hashing, history, logging, console, monitoring GUI, DB schema)_
 
 ---
@@ -252,6 +252,32 @@ _Open 5 `send.py` clients and log each one in (alice, bob, carol, dave, erin). K
 | L19 | After a lobby is disbanded, erin: `start_lobby` | Success (the game slot is free again) | |
 | L20 | Set `maxConcurrentGames=2`, restart; two hosts `start_lobby` | Both succeed; `get_lobbies` lists both | |
 
+## M. Table setup, dealing, and passing (#71, #70 · use cases 16–17 · test cases 17–18)
+
+_Get 4 logged-in clients into one lobby (section L) and have the host send `start_game`._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| M1 | Host: `start_game` | All 4 get `game_started` with `players` in lobby order and `"scores":[0,0,0,0]` (TC 17) | |
+| M2 | Look at each client's `round_started` | `round` 1, `passDirection` `"left"`, 13 cards, sorted C→D→S→H, low→high (TC 18) | |
+| M3 | Compare all 4 hands | 52 different cards, no duplicates | |
+| M4 | Check `passTo` | Each player's `passTo` is the **next** player in `players` (the last one passes to the first) | |
+| M5 | Monitor → View Hearts Games | `In game - round 1, passing left` | |
+| M6 | `pass_cards` with only 2 cards | `INVALID_CARDS`, "pass exactly 3 cards" | |
+| M7 | `pass_cards` with a card that isn't in your hand | `INVALID_CARDS`, "you can only pass cards from your hand" | |
+| M8 | `pass_cards` with the same card twice | `INVALID_CARDS`, "you picked the same card twice" | |
+| M9 | `pass_cards` with `"1X"` | `INVALID_CARDS`, `"1X" isn't a card…` | |
+| M10 | Valid `pass_cards` (3 of your cards, e.g. `["QD","10S","JH"]`) | Success, "waiting for the other players"; the other 3 get `player_passed` with your name | |
+| M11 | Same player passes again | `ALREADY_PASSED` | |
+| M12 | No one else has passed yet | Nobody gets `cards_received` or `player_turn` yet | |
+| M13 | The other 3 pass | Each gets `cards_received`: `from` = the player before them, `cards` = exactly what that player passed, `hand` = 13 cards without the ones they passed | |
+| M14 | Right after M13 | All 4 get `player_turn` naming the player whose new `hand` has `"2C"`, with their `playerNum`, and `trick` 1 (TC 18) | |
+| M15 | Anyone sends `pass_cards` after M14 | `NOT_PASSING_PHASE` | |
+| M16 | A player who isn't in a game sends `pass_cards` | `NOT_IN_GAME` | |
+| M17 | Monitor after M14 | `In game - round 1, playing` | |
+
+_Rounds 2–4 (right, across, hold) can't be reached until scoring (#69) is built. The rotation was checked with a direct test of `Table`._
+
 ---
 
 ## Failures
@@ -267,6 +293,7 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ## Change log
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).
+- **2026-11-23 (d):** Section M (table setup, dealing, and passing, #71 and #70).
 - **2026-11-23 (c):** Section L (lobbies and game sessions, #64 and #63).
 - **2026-11-23 (b):** Strong example passwords (the server now enforces the client's password rule); C14–C19 (username, password, unique email); E10–E11; section K (`server.ini`).
 - **2026-11-23:** Added section I (lockout, #54) and section J (Server Monitoring GUI, #65/#72/#73/#74); H6 (v2→v3 upgrade); A1 mentions the GUI.

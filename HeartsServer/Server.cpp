@@ -127,6 +127,7 @@ void Server::registerHandlers()
     m_handlers["join_lobby"]       = &Server::handleJoinLobby;
     m_handlers["leave_lobby"]      = &Server::handleLeaveLobby;
     m_handlers["start_game"]       = &Server::handleStartGame;
+    m_handlers["pass_cards"]       = &Server::handlePassCards;
 }
 
 bool Server::start(quint16 port)
@@ -738,7 +739,146 @@ void Server::handleStartGame(Connection& conn, const Message& request)
     logMessage("[Game] lobby " + QString::number(game->lobbyId()) + " started by \"" +
                conn.username + "\"");
     replyOk(conn, request, "game started");
-    sendToLobby(*game, "game_started", {{"players", game->lobby().playerNames()}});
+
+    // Use case 16 (#71): seats = the players order, every score 0.
+    QJsonArray scores;
+    for (int score : game->table()->scores())
+        scores.append(score);
+    sendToLobby(*game, "game_started", {{"players", game->lobby().playerNames()}, {"scores", scores}});
+
+    // Use case 17 (#70): round 1 was dealt by startGame(); tell each player.
+    announceRound(*game);
+}
+
+// ===========================================================================
+//  In-game: table setup and passing (issue #71 / use case 16,
+//  issue #70 / use case 17)
+//
+//  After start_game:
+//    everyone   <- game_started  {players, scores:[0,0,0,0]}         (#71)
+//    each seat  <- round_started {round, passDirection, passTo, hand} (#70, private)
+//    each seat  -> pass_cards    {cards:["QS","AH","2D"]}
+//    everyone   <- player_passed {username}           (so UIs can show who's done)
+//    ...once all 4 have passed:
+//    each seat  <- cards_received {from, cards, hand}                 (private)
+//    everyone   <- player_turn   {username, playerNum, trick:1}  (2C holder leads)
+//  In a hold round (every 4th), round_started has passDirection "hold" and
+//  player_turn follows straight away.
+// ===========================================================================
+
+void Server::sendToSeat(const GameManager& game, int seatIndex, const QString& command,
+                        QJsonObject fields, qint64 requestId)
+{
+    const Table* table = game.table();
+    if (!table)
+        return;
+    fields["lobbyId"] = game.lobbyId();
+    if (Connection* c = findConnectionByPlayer(table->seat(seatIndex).playerId))
+        sendMessage(*c, command, requestId, fields);
+}
+
+static QJsonArray cardsToJson(const std::vector<Card>& cards)
+{
+    QJsonArray array;
+    for (const Card& c : cards)
+        array.append(c.code());
+    return array;
+}
+
+void Server::announceRound(GameManager& game)
+{
+    Table& table = *game.table();
+    const bool hold = table.passDirection() == Table::PassDirection::Hold;
+
+    // One id shared by all four private messages, like a broadcast.
+    const qint64 id = m_nextServerRequestId--;
+    for (int seat = 0; seat < Table::kSeats; ++seat) {
+        QJsonObject fields{
+            {"round",         table.roundNumber()},
+            {"passDirection", Table::directionName(table.passDirection())},
+            {"hand",          cardsToJson(table.hand(seat))},
+        };
+        // Who your 3 cards go to (empty on a hold round).
+        fields["passTo"] = hold ? QString() : table.seat(table.passTarget(seat)).username;
+        sendToSeat(game, seat, "round_started", fields, id);
+    }
+    logMessage(QString("[Game] lobby %1: round %2 dealt, passing %3")
+                   .arg(game.lobbyId()).arg(table.roundNumber())
+                   .arg(Table::directionName(table.passDirection())));
+
+    if (hold)
+        announceTurn(game, table.leadSeat());
+    emit stateChanged();
+}
+
+void Server::announceTurn(GameManager& game, int seatIndex)
+{
+    const Table& table = *game.table();
+    sendToLobby(game, "player_turn",
+                {{"username",  table.seat(seatIndex).username},
+                 {"playerNum", seatIndex + 1},
+                 {"trick",     1}});
+    logMessage(QString("[Game] lobby %1: \"%2\" has the 2 of Clubs and leads")
+                   .arg(game.lobbyId()).arg(table.seat(seatIndex).username));
+}
+
+// pass_cards {cards:[3 card codes]}  ->  pass_cards_result
+void Server::handlePassCards(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+    GameManager* game = conn.lobbyId ? findGame(*conn.lobbyId) : nullptr;
+    Table* table = game ? game->table() : nullptr;
+    const int seat = table ? table->seatOf(*conn.playerId) : -1;
+    if (seat < 0)
+        return replyFail(conn, request, ErrorCode::NotInGame, "you're not in a game");
+
+    // Read the card codes. Anything that isn't a real card is rejected.
+    std::vector<Card> cards;
+    for (const QJsonValue& v : request.body.value("cards").toArray()) {
+        const std::optional<Card> card = Card::fromCode(v.toString());
+        if (!card)
+            return replyFail(conn, request, ErrorCode::InvalidCards,
+                             "\"" + v.toString() + "\" isn't a card (use codes like \"QS\", \"10H\")");
+        cards.push_back(*card);
+    }
+
+    switch (table->submitPass(seat, cards)) {
+    case Table::PassResult::NotPassingPhase:
+        return replyFail(conn, request, ErrorCode::NotPassingPhase, "there's no passing right now");
+    case Table::PassResult::AlreadyPassed:
+        return replyFail(conn, request, ErrorCode::AlreadyPassed, "you already passed your cards");
+    case Table::PassResult::WrongCount:
+        return replyFail(conn, request, ErrorCode::InvalidCards,
+                         QString("pass exactly %1 cards").arg(Table::kCardsToPass));
+    case Table::PassResult::NotInHand:
+        return replyFail(conn, request, ErrorCode::InvalidCards, "you can only pass cards from your hand");
+    case Table::PassResult::Duplicate:
+        return replyFail(conn, request, ErrorCode::InvalidCards, "you picked the same card twice");
+    case Table::PassResult::Ok:
+        break;
+    }
+
+    replyOk(conn, request, "cards chosen, waiting for the other players");
+    sendToLobby(*game, "player_passed", {{"username", conn.username}}, *conn.playerId);
+
+    if (!table->allPassed())
+        return;
+
+    // Everyone has picked: move the cards, then tell each player privately
+    // what they got and show their new hand.
+    table->applyPasses();
+    const qint64 id = m_nextServerRequestId--;
+    for (int s = 0; s < Table::kSeats; ++s)
+        sendToSeat(*game, s, "cards_received",
+                   {{"from",  table->seat(table->passSource(s)).username},
+                    {"cards", cardsToJson(table->receivedCards(s))},
+                    {"hand",  cardsToJson(table->hand(s))}},
+                   id);
+    logMessage(QString("[Game] lobby %1: cards passed").arg(game->lobbyId()));
+
+    // Use case 17 step 3: the 2 of Clubs holder leads the first trick.
+    announceTurn(*game, table->leadSeat());
     emit stateChanged();
 }
 

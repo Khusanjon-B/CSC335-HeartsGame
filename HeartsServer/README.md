@@ -7,7 +7,7 @@ accounts (register / login / logout / password recovery / lockout), and stores p
 a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** window lets
 the admin see who's connected, who's logged in, the registered count, and locked
 accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
-4-player game. Card play isn't built yet.
+4-player game; the server then seats everyone, shuffles, deals, and runs the 3-card pass. Trick play isn't built yet.
 
 **Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
 
@@ -39,7 +39,10 @@ accounts, and unlock them. Players can create, list, join, and leave lobbies, an
 | Game sessions: start / list / join / leave lobby, host starts game (#64) | ✅ Working (tested) |
 | Host leaving disbands the lobby (#63) | ✅ Working (tested) |
 | Max concurrent games (`server.ini`, default 1) | ✅ Working (tested) |
-| Table setup, dealing, tricks, scoring (#71, #70, #66, #69…) | ❌ Not started |
+| Table setup: seats + scores 0 (#71) | ✅ Working (tested) |
+| Shuffle, deal 13 each, 3-card pass (left / right / across / hold) (#70) | ✅ Working (tested) |
+| 2 of Clubs holder prompted to lead trick 1 (#70) | ✅ Working (tested) |
+| Trick play, scoring, game end, play again (#66, #69, #68, #67) | ❌ Not started |
 
 ---
 
@@ -71,6 +74,9 @@ Starting the server opens **two windows**:
 | `MonitorWindow.h/.cpp` | The Server Monitoring GUI window |
 | `GameManager.h/.cpp` | One game session: lobbyId, its `Lobby`, state (waiting / in game), join and start rules |
 | `Lobby.h` | The players in a lobby, in seat order (host first) |
+| `Table.h/.cpp` | The game table: seats, scores, hands, rounds, passing |
+| `Card.h` | One card, plus the `"QS"` / `"10H"` card codes |
+| `Deck.h` | 52-card deck: `newDeck()`, `shuffle()`, `dealCards()` |
 | `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
 | `Message.h` | `struct Message`, the requestId rules, and `redactSecrets()` |
@@ -161,7 +167,12 @@ The short version:
 | _(server)_ `server_message` | `text` | — |
 | _(server)_ `player_joined` / `player_left` | `lobbyId`, `username`, `players` | — |
 | _(server)_ `host_left` | `lobbyId`, `username`, `message` | — |
-| _(server)_ `game_started` | `lobbyId`, `players` | — |
+| `pass_cards` | `cards` (3 codes) | `NOT_LOGGED_IN`, `NOT_IN_GAME`, `NOT_PASSING_PHASE`, `ALREADY_PASSED`, `INVALID_CARDS` |
+| _(server)_ `game_started` | `lobbyId`, `players`, `scores` | — |
+| _(server)_ `round_started` (private) | `lobbyId`, `round`, `passDirection`, `passTo`, `hand` | — |
+| _(server)_ `player_passed` | `lobbyId`, `username` | — |
+| _(server)_ `cards_received` (private) | `lobbyId`, `from`, `cards`, `hand` | — |
+| _(server)_ `player_turn` | `lobbyId`, `username`, `playerNum`, `trick` | — |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -259,9 +270,28 @@ start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [
 - **Non-host leaves:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
 - **Starting:** only the host can start, and only with exactly 4 players. The lobby then closes to new players.
 - **Game limit:** `maxConcurrentGames` in `server.ini` (default 1). A new `start_lobby` past the limit gets `COULD_NOT_CREATE_LOBBY`.
-- **Not built yet:** the `Table` (cards, scores) is issue #71 onward. `GameManager::startGame()` marks where it plugs in.
+- **Starting** creates the game's `Table` (see the next section).
 
 Full message formats are in [PROTOCOL.md](PROTOCOL.md#lobbies-and-game-sessions-use-cases-811-issues-64-and-63).
+
+---
+
+## The table: seats, dealing, and passing (#71, #70 · use cases 16–17)
+
+When the host starts the game, `GameManager::startGame()` creates a **`Table`** (class diagram):
+1. **Seats (use case 16):** the 4 players sit in lobby order (seat 0 = host), and every score is 0. Seats are copied from the lobby, so they never shift during the game.
+2. **Round (use case 17):** `startNewRound()` makes a `Deck`, shuffles it on the server (so players can't tamper with it), and deals 13 cards to each player.
+3. **Pass:** the direction rotates **left → right → across → hold** (team notes: "left right across hold - 4 cycles").
+   - Each player picks 3 cards with `pass_cards`.
+   - Nothing moves until all 4 have picked; then `applyPasses()` moves them all at once.
+   - Hold rounds skip this step.
+4. **Lead:** the holder of the **2 of Clubs** is sent `player_turn` to lead trick 1.
+
+**Card format:** cards are codes like `"QS"`, `"10H"` (`Card::code()` / `Card::fromCode()`).
+
+**Monitor:** the "View Hearts Games" view shows the round and phase, e.g. `In game - round 1, passing left`.
+
+The `Table` never sends messages itself. `Server::announceRound()`, `handlePassCards()` and `announceTurn()` do that.
 
 ---
 
@@ -327,12 +357,20 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
-- [ ] Table setup, dealing and passing, tricks, scoring, game end, play again (#71, #70, #66, #69, #68, #67)
+- [ ] Trick play, scoring, game end, play again (#66, #69, #68, #67)
 - [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
 
 ---
 
 ## Change log
+
+### 2026-11-23 (d) — Table setup, dealing, passing (#71, #70)
+- **New classes:** `Card`, `Deck`, and `Table`, from the class diagram.
+- **`game_started`** now includes `scores: [0,0,0,0]`. Seats follow the `players` order.
+- **Round 1 is dealt automatically:** each player privately gets `round_started` with their 13-card hand and the pass direction.
+- **New command `pass_cards`.** Once all 4 have passed, each player gets `cards_received`, then everyone gets `player_turn` for the 2 of Clubs holder.
+- **Pass direction** rotates left → right → across → hold.
+- **New error codes:** `NOT_IN_GAME`, `NOT_PASSING_PHASE`, `ALREADY_PASSED`, `INVALID_CARDS`.
 
 ### 2026-11-23 (c) — Game sessions and lobbies (#64, #63)
 - **New classes:** `GameManager` (one per game) and `Lobby`, named after the class diagram.

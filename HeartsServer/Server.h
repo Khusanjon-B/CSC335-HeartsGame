@@ -132,6 +132,21 @@ private:
     void handleLeaveLobby(Connection& conn, const Message& request);   // leave (host leaving disbands)
     void handleStartGame(Connection& conn, const Message& request);    // host starts a full lobby
 
+    // ---- in-game (issues #71, #70; use cases 16, 17) ----
+    void handlePassCards(Connection& conn, const Message& request);    // pick 3 cards to pass
+
+    // Tells each player privately about the new round: their hand and the
+    // pass direction (round_started). If it's a hold round, play starts at once.
+    void announceRound(GameManager& game);
+
+    // Tells everyone whose turn it is (player_turn). For now this is only
+    // the 2-of-Clubs holder leading trick 1; trick play is issue #66.
+    void announceTurn(GameManager& game, int seatIndex);
+
+    // Sends a server-initiated message to ONE seat at the table.
+    void sendToSeat(const GameManager& game, int seatIndex, const QString& command,
+                    QJsonObject fields, qint64 requestId);
+
     // Replies NOT_LOGGED_IN and returns false if this connection isn't logged in.
     bool requireLogin(Connection& conn, const Message& request);
 

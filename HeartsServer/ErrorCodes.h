@@ -54,6 +54,12 @@ inline const QString NotInLobby          = "NOT_IN_LOBBY";           // leave/st
 inline const QString NotHost             = "NOT_HOST";               // only the host can start the game
 inline const QString LobbyNotFull        = "LOBBY_NOT_FULL";         // need 4 players to start
 
+// ---- in-game: passing (use case 17) ----
+inline const QString NotInGame        = "NOT_IN_GAME";         // not seated at a started game
+inline const QString NotPassingPhase  = "NOT_PASSING_PHASE";   // passing is over, or this is a hold round
+inline const QString AlreadyPassed    = "ALREADY_PASSED";      // you already picked your 3 cards
+inline const QString InvalidCards     = "INVALID_CARDS";       // not 3 cards, bad code, not in your hand, or a duplicate
+
 // ---- recover_password ----
 inline const QString RecoveryFailed   = "RECOVERY_FAILED";     // username/email/pin don't match
 }

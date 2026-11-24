@@ -24,5 +24,8 @@ qt_add_executable(test_server
     MonitorWindow.h  MonitorWindow.cpp
     Lobby.h
     GameManager.h    GameManager.cpp
+    Card.h
+    Deck.h
+    Table.h          Table.cpp
 )
 target_link_libraries(test_server PRIVATE Qt6::Core Qt6::Network Qt6::Sql Qt6::Widgets)
