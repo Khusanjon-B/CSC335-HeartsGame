@@ -11,7 +11,17 @@
 //   QTcpSocket::disconnected   -> onDisconnected()   a client left
 //
 // They all run on the main thread, one at a time, so two of them can never
-// touch m_connections or the database at the same moment.
+// touch m_connections or the database at the same moment. The monitor
+// window (MonitorWindow) runs on that same thread too.
+//
+// Sections in this file:
+//   Connection bookkeeping   - connect / read / disconnect, logout helpers
+//   Monitoring GUI queries   - what the admin window reads (view*, unlock)
+//   Receiving                - JSON parsing, then one handler per command
+//   Sending                  - sendMessage + the reply helpers
+//
+// Whenever something the admin can see changes, we `emit stateChanged()`
+// so the monitor window redraws.
 // ---------------------------------------------------------------------------
 
 #include "Server.h"
@@ -29,6 +39,10 @@
 // ---- input rules (change them here) ----
 static constexpr int kMinPinLength = 4;
 static constexpr int kMaxPinLength = 8;
+
+// ---- lockout rules (use case 7 / test case 7, issue #54) ----
+static constexpr int kMaxFailedLogins  = 3;   // this many wrong passwords in a row locks the account
+static constexpr int kLockoutMinutes   = 5;   // how long the lock lasts (or until an admin unlocks)
 
 // Loose email check: something@something.something, no spaces.
 static bool looksLikeEmail(const QString& email)
@@ -122,6 +136,7 @@ void Server::onNewConnection()
         connect(socket, &QTcpSocket::disconnected, this,
                 [this, socket] { onDisconnected(socket); });
     }
+    emit stateChanged();   // connected count changed
 }
 
 void Server::onReadyRead(QTcpSocket* socket)
@@ -161,6 +176,7 @@ void Server::onDisconnected(QTcpSocket* socket)
     // Free the socket once Qt is done with the current signal. Deleting it
     // right now, while it's still emitting, could crash.
     socket->deleteLater();
+    emit stateChanged();   // connected count changed
 }
 
 Connection* Server::findConnection(QTcpSocket* socket)
@@ -187,6 +203,7 @@ void Server::logoutConnection(Connection& conn)
     conn.playerId.reset();   // back to anonymous; the socket stays open
     conn.username.clear();
     conn.verified = false;
+    emit stateChanged();     // logged-in list changed
 }
 
 void Server::logoutEveryone()
@@ -194,6 +211,47 @@ void Server::logoutEveryone()
     for (Connection& c : m_connections)
         if (c.verified)
             logoutConnection(c);
+}
+
+// ===========================================================================
+//  Server Monitoring GUI queries (see Server.h)
+// ===========================================================================
+
+std::vector<Server::ClientInfo> Server::viewConnectedUsers() const
+{
+    std::vector<ClientInfo> result;
+    for (const Connection& c : m_connections)
+        result.push_back({c.ip, c.username, c.verified});
+    return result;
+}
+
+std::vector<Server::ClientInfo> Server::viewLoggedInUsers() const
+{
+    std::vector<ClientInfo> result;
+    for (const Connection& c : m_connections)
+        if (c.verified)
+            result.push_back({c.ip, c.username, true});
+    return result;
+}
+
+std::optional<int> Server::viewRegisteredUsers()
+{
+    return m_db.registeredPlayerCount();
+}
+
+std::optional<std::vector<LockedAccount>> Server::viewLockedAccounts()
+{
+    return m_db.lockedAccounts();
+}
+
+bool Server::unlockAccount(const QString& username)
+{
+    const bool ok = m_db.unlockAccount(username);
+    if (ok) {
+        logMessage("[Admin] unlocked account \"" + username + "\"");
+        emit stateChanged();
+    }
+    return ok;
 }
 
 // ===========================================================================
@@ -274,6 +332,7 @@ void Server::handleRegister(Connection& conn, const Message& request)
     // Registering doesn't log you in. The client sends "login" next.
     logMessage("[Auth] registered \"" + username + "\" as player " + QString::number(newId));
     replyOk(conn, request, "account created, you can now log in", {{"playerId", newId}});
+    emit stateChanged();   // registered count changed
 }
 
 void Server::handleLogin(Connection& conn, const Message& request)
@@ -288,13 +347,53 @@ void Server::handleLogin(Connection& conn, const Message& request)
         return replyFail(conn, request, ErrorCode::MissingFields,
                          "username and password are required");
 
-    // Hash what they typed with the stored salt and compare to the stored hash.
-    // Same message for "no such user" and "wrong password", so nobody can
+    // Unknown username: there's no account to count failures against, so
+    // just fail. Same code and message as a wrong password, so nobody can
     // use this to find out which usernames exist.
-    const std::optional<PlayerRecord> player = m_db.findPlayer(username);
-    if (!player || !PasswordHasher::verify(password, player->passwordHash, player->passwordSalt)) {
-        logMessage("[Auth] login failed for " + conn.label() + " as \"" + username + "\"");
+    std::optional<PlayerRecord> player = m_db.findPlayer(username);
+    if (!player) {
+        logMessage("[Auth] login failed for " + conn.label() + " as \"" + username + "\" (no such user)");
         return replyFail(conn, request, ErrorCode::InvalidCredentials, "wrong username or password");
+    }
+
+    // ---- LOCKOUT (issue #54) ----
+    // 1. Still locked? Refuse, even if the password is right.
+    if (player->isLocked()) {
+        logMessage("[Auth] login refused for \"" + username + "\": account locked until " +
+                   player->lockedUntil.toString("hh:mm:ss"));
+        return replyLocked(conn, request, *player);
+    }
+
+    // 2. Lock has expired (5 minutes passed)? Start counting from zero again.
+    if (player->lockedUntil.isValid()) {
+        m_db.resetFailedLogins(player->id);
+        player->failedAttempts = 0;
+        player->lockedUntil = QDateTime();
+    }
+
+    // 3. Wrong password: count it, and lock the account on the 3rd one.
+    //    Hash what they typed with the stored salt and compare to the stored hash.
+    if (!PasswordHasher::verify(password, player->passwordHash, player->passwordSalt)) {
+        const int attempts = m_db.recordFailedLogin(player->id);
+        logMessage("[Auth] login failed for " + conn.label() + " as \"" + username +
+                   "\" (failed attempt " + QString::number(attempts) + " of " +
+                   QString::number(kMaxFailedLogins) + ")");
+
+        if (attempts >= kMaxFailedLogins) {
+            player->lockedUntil = QDateTime::currentDateTime().addSecs(kLockoutMinutes * 60);
+            player->failedAttempts = attempts;
+            m_db.lockAccount(player->id, player->lockedUntil);
+            logMessage("[Auth] account \"" + username + "\" LOCKED for " +
+                       QString::number(kLockoutMinutes) + " minutes");
+            emit stateChanged();   // locked-out list changed
+            return replyLocked(conn, request, *player);
+        }
+
+        QJsonObject extra{{"failed_attempts", attempts}};
+        return replyFail(conn, request, ErrorCode::InvalidCredentials,
+                         QString("wrong username or password (%1 of %2 attempts used)")
+                             .arg(attempts).arg(kMaxFailedLogins),
+                         extra);
     }
 
     // One login per account at a time.
@@ -302,11 +401,15 @@ void Server::handleLogin(Connection& conn, const Message& request)
         return replyFail(conn, request, ErrorCode::AccountInUse,
                          "this account is already logged in from another connection");
 
-    // Success: attach the player to this connection, then update the DB.
+    // Success: clear any failed attempts, attach the player to this
+    // connection, then update the DB.
+    if (player->failedAttempts > 0)
+        m_db.resetFailedLogins(player->id);
     conn.playerId = player->id;
     conn.username = player->username;
     conn.verified = true;
     m_db.markLoggedIn(player->id);
+    emit stateChanged();   // logged-in list changed
 
     logMessage("[Auth] " + conn.ip + " logged in as \"" + conn.username +
                "\" (player " + QString::number(player->id) + ")");
@@ -405,9 +508,24 @@ void Server::replyOk(Connection& conn, const Message& request, const QString& te
 }
 
 void Server::replyFail(Connection& conn, const Message& request, const QString& errorCode,
-                       const QString& text)
+                       const QString& text, QJsonObject extra)
 {
-    replyResult(conn, request, errorCode, text, {});
+    replyResult(conn, request, errorCode, text, extra);
+}
+
+void Server::replyLocked(Connection& conn, const Message& request, const PlayerRecord& player)
+{
+    // Whole minutes left, rounded up, so it never says "0 minutes".
+    const qint64 secondsLeft = QDateTime::currentDateTime().secsTo(player.lockedUntil);
+    const qint64 minutesLeft = (secondsLeft + 59) / 60;
+
+    QJsonObject extra;
+    extra["failed_attempts"] = player.failedAttempts;
+    extra["lockedUntil"]     = player.lockedUntil.toString(Qt::ISODate);
+    replyFail(conn, request, ErrorCode::AccountLocked,
+              QString("account locked after %1 failed attempts, try again in %2 minute(s)")
+                  .arg(kMaxFailedLogins).arg(minutesLeft),
+              extra);
 }
 
 void Server::sendError(Connection& conn, qint64 requestId, const QString& errorCode,

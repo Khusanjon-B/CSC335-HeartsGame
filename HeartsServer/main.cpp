@@ -7,8 +7,13 @@
 //   1. Opens the log file (logs/server-YYYY-MM-DD.log next to the .exe).
 //   2. Opens the SQLite database (hearts.db next to the .exe).
 //   3. Starts the TCP Server.
-//   4. Starts a console thread so you can type broadcasts or "exit".
-//   5. Runs Qt's event loop, which handles all network traffic.
+//   4. Opens the Server Monitoring GUI window (MonitorWindow).
+//   5. Starts a console thread so you can type broadcasts or "exit".
+//   6. Runs Qt's event loop, which handles all network traffic AND the
+//      window's clicks/redraws.
+//
+// The terminal is the log view; the window is the admin view. Closing the
+// window or typing "exit" in the terminal both shut the server down.
 //
 // Files:
 //   Log.h/cpp            - logMessage(): terminal + log file
@@ -16,10 +21,13 @@
 //   Connection.h         - struct Connection: one connected client
 //   PasswordHasher.h/cpp - salted SHA-256 for passwords and pins
 //   Database.h/cpp       - all SQLite access (players table)
+//   ErrorCodes.h         - every error code the server can send
 //   Server.h/cpp         - TCP server, JSON parsing, command handlers
+//   MonitorWindow.h/cpp  - Server Monitoring GUI (admin window)
 //
 // THREADS: only two.
-//   - Main thread: Qt event loop. ALL networking and ALL database work.
+//   - Main thread: Qt event loop. ALL networking, ALL database work and
+//     the GUI window.
 //   - Console thread: blocks on std::getline (so it can't run on the main
 //     thread). It never touches server data; it hands work to the main
 //     thread with QMetaObject::invokeMethod, so nothing needs a lock.
@@ -27,9 +35,10 @@
 
 #include "Database.h"
 #include "Log.h"
+#include "MonitorWindow.h"
 #include "Server.h"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QDate>
 #include <iostream>
 #include <string>
@@ -37,7 +46,7 @@
 
 // Reads lines typed into the server's terminal on a background thread.
 // "exit" quits the server; anything else is broadcast to all clients.
-static void startConsoleThread(QCoreApplication& app, Server& server)
+static void startConsoleThread(QApplication& app, Server& server)
 {
     std::thread([&app, &server] {
         std::string input;
@@ -65,7 +74,9 @@ static void startConsoleThread(QCoreApplication& app, Server& server)
 
 int main(int argc, char* argv[])
 {
-    QCoreApplication app(argc, argv);
+    // QApplication (instead of QCoreApplication) is needed for windows.
+    // It's still the same event loop that drives the network code.
+    QApplication app(argc, argv);
     const QString exeDir = QCoreApplication::applicationDirPath();
 
     // ---- log file: one per day, e.g. logs/server-2026-11-16.log ----
@@ -101,6 +112,11 @@ int main(int argc, char* argv[])
     // Right before the event loop stops (e.g. after "exit"), log everyone out
     // so the DB stays accurate.
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &server, &Server::logoutEveryone);
+
+    // ---- Server Monitoring GUI ----
+    // Created after the server so it can read live data from it right away.
+    MonitorWindow monitor(server);
+    monitor.show();
 
     startConsoleThread(app, server);
 

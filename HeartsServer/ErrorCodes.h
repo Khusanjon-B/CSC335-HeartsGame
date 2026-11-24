@@ -37,6 +37,7 @@ inline const QString InvalidPin       = "INVALID_PIN";         // not a 4-8 digi
 inline const QString InvalidCredentials = "INVALID_CREDENTIALS"; // wrong username or password (deliberately the same code)
 inline const QString AlreadyLoggedIn    = "ALREADY_LOGGED_IN";   // this connection is already logged in
 inline const QString AccountInUse       = "ACCOUNT_IN_USE";      // account is logged in on another connection
+inline const QString AccountLocked      = "ACCOUNT_LOCKED";      // 3 failed logins; locked for 5 min or until an admin unlocks
 
 // ---- logout ----
 inline const QString NotLoggedIn      = "NOT_LOGGED_IN";       // nothing to log out of

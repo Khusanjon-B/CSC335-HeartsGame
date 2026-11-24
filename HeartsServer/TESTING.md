@@ -4,8 +4,8 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-19 (covers: connections, protocol, error codes, register, login/logout,
-password recovery, hashing, history, logging, console, DB schema)_
+_Last updated: 2026-11-23 (covers: connections, protocol, error codes, register, login/logout,
+lockout, password recovery, hashing, history, logging, console, monitoring GUI, DB schema)_
 
 ---
 
@@ -55,7 +55,7 @@ add a note under [Failures](#failures).
 
 | ID | Steps | Expected | Result |
 |---|---|---|---|
-| A1 | Start the server | Terminal shows the log-file path, `[DB] opened ...hearts.db`, `listening on port 5000 at:`, and your IPs | |
+| A1 | Start the server | Terminal shows the log-file path, `[DB] opened ...hearts.db`, `listening on port 5000 at:`, and your IPs. A **"Hearts Server Monitor"** window also opens | |
 | A2 | Check the build folder | `hearts.db` and `logs/server-<today>.log` exist | |
 | A3 | Connect with `send.py` | Server logs `connected     127.0.0.1:<port>` | |
 | A4 | Connect from another computer on the same Wi-Fi, using an IP from A1 | Connects, server logs that machine's IP | |
@@ -164,8 +164,48 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 | H1 | Register a user, stop the server, start it again, log in | Login works (data persisted) | |
 | H2 | Kill the server while logged in (Stop button in Qt Creator), restart | Startup resets `connected` to 0 for everyone | |
 | H3 | **With an old (pre-11-16) DB:** start the server | Logs `old players table (schema v0) renamed to players_old`; both tables exist | |
-| H4 | After H3, check `PRAGMA user_version` | `2` | |
+| H4 | After H3, check `PRAGMA user_version` | `3` | |
 | H5 | Restart after H3 | No rename message the second time | |
+| H6 | **With a v2 DB (made 11-16 to 11-22):** start the server | Logs `upgraded from schema v2 to v3`; **all existing accounts still log in**; `failed_attempts` and `locked_until` columns exist | |
+
+## I. Failed logins and lockout (issue #54 · use case 7 · test case 7)
+
+_Register `zed` / `right` first. Tip: for I7, set `locked_until` to a past time in DB Browser instead of waiting 5 minutes._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| I1 | Login zed / `wrong` | `INVALID_CREDENTIALS`, `"failed_attempts":1`, message says `1 of 3 attempts used` | |
+| I2 | Login zed / `wrong` again | `failed_attempts` 2 | |
+| I3 | Login zed / `wrong` a 3rd time | `ACCOUNT_LOCKED`, `failed_attempts` 3, `lockedUntil` ≈ now + 5 min; server log says `LOCKED for 5 minutes` | |
+| I4 | Login zed / **`right`** while locked | Still `ACCOUNT_LOCKED` (the correct password doesn't help) | |
+| I5 | Login `nobody` / `x` | `INVALID_CREDENTIALS` with **no** `failed_attempts` field | |
+| I6 | Check the DB during the lock | zed: `failed_attempts` 3, `locked_until` set | |
+| I7 | Wait 5 minutes (or see the tip), login zed / `wrong` | `INVALID_CREDENTIALS`, `failed_attempts` **1** (count restarted) | |
+| I8 | Then login zed / `right` | Success; DB `failed_attempts` 0, `locked_until` NULL | |
+| I9 | 2 wrong, then right, then 1 wrong | Last reply shows `failed_attempts` 1 (success reset the count) | |
+| I10 | Lock zed, restart the server, try logging in | Still `ACCOUNT_LOCKED` (the lock is saved in the DB) | |
+
+## J. Server Monitoring GUI (#65, #72, #73, #74 · use cases 7.2, 12–15 · test cases 8, 13–16)
+
+_Use the "Hearts Server Monitor" window. Open 2–3 `send.py` clients._
+
+| ID | Steps | Expected | Result |
+|---|---|---|---|
+| J1 | Start the server, no clients; click **View Connected User Count** | `Connected clients: 0` and "No accounts currently connected" (TC 16.1) | |
+| J2 | Connect 2 clients (don't log in) | The list updates **by itself** to 2 entries, both `(not logged in)` (TC 16) | |
+| J3 | Click **View Logged-In Users** with nobody logged in | `Logged-in users: 0` and "No users currently logged in" (TC 13.1) | |
+| J4 | Log one client in as alice | The list updates by itself: `alice (127.0.0.1:...)` (TC 13) | |
+| J5 | alice logs out, or closes `send.py` | alice disappears from Logged-In (and from Connected if she closed it) | |
+| J6 | Click **View Registered User Count** | `Registered users: N` matches the number of rows in `players` (TC 14) | |
+| J7 | Register a new account while on that view | The count goes up by 1 by itself | |
+| J8 | No locked accounts; click **View Locked-Out Users** | "No accounts currently locked"; Unlock button greyed out (TC 15.1) | |
+| J9 | Lock an account (3 wrong passwords) while on that view | It appears with `(unlocks in 4:59)`, counting down (TC 15) | |
+| J10 | Select it, click **Unlock Selected Account** | It disappears; the status line says `Unlocked "zed". They can sign in again.`; the terminal logs `[Admin] unlocked account` (TC 8) | |
+| J11 | After J10, log in as zed with the right password | Success | |
+| J12 | Lock an account and leave the window on Locked-Out for 5 minutes | It drops off the list by itself when the lock expires | |
+| J13 | Type in the **Broadcast** box and press Enter | Every client receives a `server_message`; the box clears | |
+| J14 | Close the monitor window | The server shuts down cleanly; logged-in users are marked logged out in the DB | |
+| J15 | Type `exit` in the terminal | The server and the window both close | |
 
 ---
 
@@ -182,3 +222,4 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ## Change log
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).
+- **2026-11-23:** Added section I (lockout, #54) and section J (Server Monitoring GUI, #65/#72/#73/#74); H6 (v2→v3 upgrade); A1 mentions the GUI.

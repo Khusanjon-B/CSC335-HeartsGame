@@ -1,6 +1,6 @@
 # Hearts Message Protocol
 
-_Matches the server as of 2026-11-19. This is the source text for the team's
+_Matches the server as of 2026-11-23. This is the source text for the team's
 "message formats" Google Doc. Paste these sections over the matching ones there._
 
 ---
@@ -90,21 +90,27 @@ Some replies add extra fields on success (listed per command).
 
 **Server, failure**
 ```json
-{"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password"}
+{"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password (1 of 3 attempts used)", "failed_attempts": 1}
 ```
-| `error` | When |
-|---|---|
-| `MISSING_FIELDS` | Username or password missing or blank |
-| `INVALID_CREDENTIALS` | Unknown username **or** wrong password (deliberately the same code) |
-| `ALREADY_LOGGED_IN` | This connection is already logged in |
-| `ACCOUNT_IN_USE` | The account is logged in on another connection |
+| `error` | When | Extra fields |
+|---|---|---|
+| `MISSING_FIELDS` | Username or password missing or blank | |
+| `INVALID_CREDENTIALS` | Unknown username **or** wrong password (deliberately the same code) | `failed_attempts`, only when the username exists |
+| `ACCOUNT_LOCKED` | 3 wrong passwords in a row; locked for 5 minutes or until an admin unlocks it | `failed_attempts`, `lockedUntil` |
+| `ALREADY_LOGGED_IN` | This connection is already logged in | |
+| `ACCOUNT_IN_USE` | The account is logged in on another connection | |
 
-> **Planned (issue #54): `failed_attempts`.** A failed login will also include
-> `"failed_attempts": <number>`, the count of consecutive failed logins for that account.
-> The account locks after 3. **Not sent yet.** Clients should treat the field as optional.
-> ```json
-> {"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password", "failed_attempts": 1}
-> ```
+**Server, locked**
+```json
+{"command": "login_result", "requestId": 4, "success": false, "error": "ACCOUNT_LOCKED", "message": "account locked after 3 failed attempts, try again in 5 minute(s)", "failed_attempts": 3, "lockedUntil": "2026-11-23T18:19:31"}
+```
+
+### Failed attempts and lockout (use case 7, issue #54)
+- **`failed_attempts`** is the number of wrong passwords **in a row** for that account. It's sent on `INVALID_CREDENTIALS` (when the username exists) and on `ACCOUNT_LOCKED`. Treat it as optional: it's left out for unknown usernames.
+- **The 3rd wrong password** locks the account for **5 minutes**. While locked, even the **right** password gets `ACCOUNT_LOCKED`.
+- **`lockedUntil`** is the server's local time (ISO) when the lock ends. Clients can show "try again after …" or use the minutes in `message`.
+- **A successful login** resets the count to 0. So does the lock running out.
+- **An admin** can unlock the account early from the Server Monitoring GUI (use case 7.2).
 
 > We use one code for "no such user" and "wrong password" (no `USERNAME_NOT_FOUND`)
 > so the reply doesn't reveal which usernames exist.
@@ -211,6 +217,7 @@ Sent by the server on its own, for example when the operator types into the serv
 | `INVALID_CREDENTIALS` | register (username taken), login |
 | `ALREADY_LOGGED_IN` | login |
 | `ACCOUNT_IN_USE` | login |
+| `ACCOUNT_LOCKED` | login |
 | `NOT_LOGGED_IN` | logout |
 | `RECOVERY_FAILED` | recover_password |
 | `SERVER_ERROR` | register, recover_password |

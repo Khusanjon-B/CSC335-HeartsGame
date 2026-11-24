@@ -1,10 +1,12 @@
 # Hearts Server — Current State
 
-_Last updated: 2026-11-19_
+_Last updated: 2026-11-23_
 
-A Qt 6 console app that accepts TCP connections from Hearts clients, handles
-accounts (register / login / logout / password recovery), and stores players in
-a SQLite database. No game logic yet.
+A Qt 6 app that accepts TCP connections from Hearts clients, handles
+accounts (register / login / logout / password recovery / lockout), and stores players in
+a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** window lets
+the admin see who's connected, who's logged in, the registered count, and locked
+accounts, and unlock them. No game logic yet.
 
 **Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
 
@@ -19,12 +21,17 @@ a SQLite database. No game logic yet.
 | Register (username, email, password, pin) | ✅ Working (tested) |
 | Login / logout (issue #59) | ✅ Working (tested) |
 | `error` code in every reply | ✅ Working (tested) |
-| Failed-login tracking / lockout (issue #54) | ❌ Not started |
+| Failed-login tracking + 5-minute lockout after 3 tries (issue #54) | ✅ Working (tested) |
 | Password recovery with a pin | ✅ Working (tested) |
 | Salted SHA-256 for passwords and pins | ✅ Working |
 | Per-connection message history | ✅ Working (last 100 messages) |
 | Log file + terminal logging | ✅ Working |
 | Console broadcast + `exit` | ✅ Working |
+| Server Monitoring GUI window | ✅ Working (tested) |
+| ↳ View logged-in users (#65) | ✅ |
+| ↳ View connected user count (#72) | ✅ |
+| ↳ View locked-out users + unlock (#73, UC 7.2) | ✅ |
+| ↳ View registered user count (#74) | ✅ |
 | Lobby / matchmaking | ❌ Not started |
 | Hearts game logic | ❌ Not started |
 
@@ -32,16 +39,19 @@ a SQLite database. No game logic yet.
 
 ## Building and running
 
-- **Qt:** 6.11.1, MinGW 64-bit (needs the `Core`, `Network`, and `Sql` modules)
+- **Qt:** 6.11.1, MinGW 64-bit (needs the `Core`, `Network`, `Sql`, and `Widgets` modules)
 - **Build:** open `CMakeLists.txt` in Qt Creator and run it
 - **Executable:** `test_server [port]`, default port **5000**
 - **Files the server creates next to the `.exe`** (inside `build/`, which git ignores):
   - `hearts.db`: the database. Delete it to start over.
   - `logs/server-YYYY-MM-DD.log`: one log file per day, appended to on each run.
 
-**Console commands** (type them into the server window):
-- any text → broadcast to every client as a `server_message`
-- `exit` → logs everyone out in the DB and shuts down
+Starting the server opens **two windows**:
+- **The terminal:** the live log. You can still type here:
+  - any text → broadcast to every client as a `server_message`
+  - `exit` → logs everyone out in the DB and shuts down
+- **"Hearts Server Monitor":** the admin GUI (see [Server Monitoring GUI](#server-monitoring-gui)).
+  Closing it also shuts the server down.
 
 ---
 
@@ -49,8 +59,9 @@ a SQLite database. No game logic yet.
 
 | File | What it does |
 |---|---|
-| `main.cpp` | Entry point. Opens the log file and the DB, starts the server and the console thread |
-| `Server.h/.cpp` | TCP server, the `m_connections` list, JSON parsing, command handlers, sending |
+| `main.cpp` | Entry point. Opens the log file and the DB, starts the server, the monitor window and the console thread |
+| `Server.h/.cpp` | TCP server, the `m_connections` list, JSON parsing, command handlers, sending, admin queries |
+| `MonitorWindow.h/.cpp` | The Server Monitoring GUI window |
 | `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
 | `Message.h` | `struct Message`, the requestId rules, and `redactSecrets()` |
@@ -59,12 +70,18 @@ a SQLite database. No game logic yet.
 | `Connection.h` | `struct Connection`: one connected client, including its message history |
 | `Log.h/.cpp` | `logMessage()` writes to the terminal and the log file |
 
+**Comment conventions (issue #35):**
+- **Every file** starts with a block saying what it's for and how it fits in.
+- **Every function** is described where it's **declared** (the `.h`).
+- **The `.cpp`** explains *how* it works, step by step where it isn't obvious.
+- **Rules and limits** (pin length, lockout count, history size) are named constants at the top of the file that uses them, each with a comment.
+
 ---
 
 ## How it works
 
 ### Threads
-- **Main thread:** runs Qt's event loop, which handles all networking and all database work.
+- **Main thread:** runs Qt's event loop, which handles all networking, all database work, and the GUI window.
   Qt calls `onNewConnection` / `onReadyRead` / `onDisconnected` when things happen.
   These run one at a time, so no locks are needed.
 - **Console thread:** blocks on `std::getline` and hands work to the main thread
@@ -120,7 +137,7 @@ The short version:
 | Command | Fields | Possible `error` codes |
 |---|---|---|
 | `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
-| `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
+| `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ACCOUNT_LOCKED`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
 | `logout` | _(none)_ | `NOT_LOGGED_IN` |
 | `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `SERVER_ERROR` |
 | _(server)_ `error` | `error`, `message` | `INVALID_JSON`, `MISSING_REQUEST_ID`, `UNKNOWN_COMMAND` |
@@ -134,6 +151,36 @@ The short version:
 4. Add any new error codes to `ErrorCodes.h`.
 5. If it has a secret field, add the field name to `redactSecrets()` in `Message.h`.
 6. Document it in `PROTOCOL.md`, and add tests to `TESTING.md`.
+
+---
+
+## Failed logins and lockout (issue #54, use case 7)
+
+- **Counting:** every wrong password adds 1 to the account's `failed_attempts`. The reply includes the count.
+- **Locking:** on the **3rd** wrong password in a row, `locked_until` is set to now + **5 minutes**, and the reply is `ACCOUNT_LOCKED`.
+- **While locked:** login is refused even with the right password.
+- **Unlocking:** the lock ends on its own when time runs out. The next login attempt starts counting from 0. An admin can also unlock it early in the GUI.
+- **Resetting:** a successful login resets the count to 0.
+- **Unknown usernames** aren't counted, since there's no account to lock.
+- **Changing the rules:** `kMaxFailedLogins` and `kLockoutMinutes` are at the top of `Server.cpp`.
+
+---
+
+## Server Monitoring GUI
+
+`MonitorWindow` is the "Server Monitoring GUI" / "ServerGUI" from the use cases and class diagram.
+
+| Button | Shows | Empty / error message | Use case · Issue |
+|---|---|---|---|
+| View Logged-In Users | Username and IP of each logged-in client | "No users currently logged in" | UC 12 · #65 |
+| View Registered User Count | Number of accounts in the DB | "An error occurred while trying to reach the database." | UC 13 · #74 |
+| View Locked-Out Users | Locked usernames and time until unlock, plus an **Unlock Selected Account** button | "No accounts currently locked" | UC 14 + 7.2 · #73 |
+| View Connected User Count | Every open connection, logged in or not | "No accounts currently connected" | UC 15 · #72 |
+
+- **Broadcast box:** works like typing in the terminal.
+- **Staying current:** the window refreshes whenever the server emits `stateChanged()` (connect, disconnect, login, logout, register, lock, unlock), plus every 5 seconds so expired locks drop off.
+- **Where the data comes from:** the window reads through `Server::viewLoggedInUsers()`, `viewConnectedUsers()`, `viewRegisteredUsers()`, `viewLockedAccounts()` and `unlockAccount()`, the same method names as the class diagram.
+- **Threads:** the window runs on the main thread, so it needs no locks.
 
 ---
 
@@ -152,7 +199,7 @@ This is a single SHA-256 pass: simple, and good enough for a class project.
 
 SQLite through Qt's built-in `QSQLITE` driver, so no separate SQLite install is needed.
 
-### Table `players` (schema version 2)
+### Table `players` (schema version 3)
 | Column | Type | Notes |
 |---|---|---|
 | `player_id` | INTEGER PK AUTOINCREMENT | |
@@ -165,14 +212,16 @@ SQLite through Qt's built-in `QSQLITE` driver, so no separate SQLite install is 
 | `last_logged_in` | TEXT | ISO timestamp, e.g. `2026-11-16T23:41:07` |
 | `last_logged_out` | TEXT | ISO timestamp |
 | `connected` | INTEGER | 0 or 1. Reset to 0 for everyone at server startup |
+| `failed_attempts` | INTEGER | Wrong passwords in a row. Reset on success or unlock _(v3)_ |
+| `locked_until` | TEXT | ISO time the lock ends; NULL or past means not locked _(v3)_ |
 
 ### Schema versions
 The database file remembers its layout version in SQLite's `PRAGMA user_version`.
-At startup, if the file is older than `kSchemaVersion` (in `Database.cpp`), the old
-`players` table is **renamed to `players_old`** (kept, not deleted) and a new one is created.
-Accounts from the old layout have to register again.
+At startup, `Database::prepareSchema()` upgrades older files:
+- **v0/v1** (plain-text passwords): the old table is **renamed to `players_old`** (kept, not deleted). Those accounts must register again.
+- **v2 → v3:** the `failed_attempts` and `locked_until` columns are added. **All accounts are kept.**
 
-**To change the table:** edit the `CREATE TABLE` in `Database::prepareSchema()` and bump `kSchemaVersion`.
+**To change the table:** edit the `CREATE TABLE`, bump `kSchemaVersion`, and add an upgrade step for the previous version (usually `ALTER TABLE ... ADD COLUMN`).
 
 ---
 
@@ -194,7 +243,6 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 ## Known issues / TODO
 
 - [ ] Team Google Doc still shows `requestID` + `data`; paste in the sections from `PROTOCOL.md`.
-- [ ] Failed-login counting and lockout, with `failed_attempts` in `login_result` (issue #54).
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] Emails aren't unique, and there's no email verification.
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
@@ -204,6 +252,13 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 ---
 
 ## Change log
+
+### 2026-11-23 — Lockout + Server Monitoring GUI (#54, #65, #72, #73, #74)
+- 3 wrong passwords in a row lock an account for 5 minutes. `login_result` carries `failed_attempts`, plus `ACCOUNT_LOCKED` and `lockedUntil` when locked.
+- New Server Monitoring GUI window (`MonitorWindow`): logged-in users, connected count, registered count, locked-out users, admin unlock, broadcast.
+- `Server` emits `stateChanged()` and has the admin query methods from the class diagram.
+- DB schema v3 adds `failed_attempts` and `locked_until`. v2 files are upgraded in place, keeping accounts.
+- App uses `QApplication` (Qt Widgets) instead of `QCoreApplication`.
 
 ### 2026-11-19 — Error codes + logout (issue #59)
 - Every `*_result` now has an `error` field: `""` on success, a code on failure. `success` is derived from it.
