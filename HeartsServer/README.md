@@ -6,7 +6,8 @@ A Qt 6 app that accepts TCP connections from Hearts clients, handles
 accounts (register / login / logout / password recovery / lockout), and stores players in
 a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** window lets
 the admin see who's connected, who's logged in, the registered count, and locked
-accounts, and unlock them. No game logic yet.
+accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
+4-player game. Card play isn't built yet.
 
 **Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
 
@@ -34,8 +35,11 @@ accounts, and unlock them. No game logic yet.
 | ↳ View connected user count (#72) | ✅ |
 | ↳ View locked-out users + unlock (#73, UC 7.2) | ✅ |
 | ↳ View registered user count (#74) | ✅ |
-| Lobby / matchmaking | ❌ Not started |
-| Hearts game logic | ❌ Not started |
+| ↳ View Hearts Games (lobbies and running games) | ✅ |
+| Game sessions: start / list / join / leave lobby, host starts game (#64) | ✅ Working (tested) |
+| Host leaving disbands the lobby (#63) | ✅ Working (tested) |
+| Max concurrent games (`server.ini`, default 1) | ✅ Working (tested) |
+| Table setup, dealing, tricks, scoring (#71, #70, #66, #69…) | ❌ Not started |
 
 ---
 
@@ -43,7 +47,7 @@ accounts, and unlock them. No game logic yet.
 
 - **Qt:** 6.11.1, MinGW 64-bit (needs the `Core`, `Network`, `Sql`, and `Widgets` modules)
 - **Build:** open `CMakeLists.txt` in Qt Creator and run it
-- **Executable:** `test_server [port]`, default port **5000**
+- **Executable:** `test_server [port]`. The port comes from `server.ini` (default **5000**); one on the command line overrides it.
 - **Files the server creates next to the `.exe`** (inside `build/`, which git ignores):
   - `hearts.db`: the database. Delete it to start over.
   - `server.ini`: settings (see [Config file](#config-file-serverini)). Created with defaults on first run.
@@ -65,6 +69,8 @@ Starting the server opens **two windows**:
 | `main.cpp` | Entry point. Opens the log file and the DB, starts the server, the monitor window and the console thread |
 | `Server.h/.cpp` | TCP server, the `m_connections` list, JSON parsing, command handlers, sending, admin queries |
 | `MonitorWindow.h/.cpp` | The Server Monitoring GUI window |
+| `GameManager.h/.cpp` | One game session: lobbyId, its `Lobby`, state (waiting / in game), join and start rules |
+| `Lobby.h` | The players in a lobby, in seat order (host first) |
 | `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
 | `Message.h` | `struct Message`, the requestId rules, and `redactSecrets()` |
@@ -104,8 +110,9 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 ### Connection lifecycle
 1. Client connects → a `Connection` is added to `m_connections` (anonymous, `verified = false`).
 2. `login` succeeds → `playerId`, `username`, and `verified` are filled in, and the DB row is marked connected.
-3. `logout` → the fields are cleared and the DB row is marked disconnected. The socket stays open.
-4. Socket disconnects → the server logs them out if needed and removes them from `m_connections`.
+3. `start_lobby` / `join_lobby` → `lobbyId` is set. `leave_lobby` clears it (see [Game sessions](#game-sessions-and-lobbies-64-63--use-cases-811)).
+4. `logout` → they leave any lobby, the login fields are cleared, and the DB row is marked disconnected. The socket stays open.
+5. Socket disconnects → same as logout (including leaving the lobby), then they're removed from `m_connections`.
 
 ### `struct Connection`
 | Field | Type | Meaning |
@@ -115,6 +122,7 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 | `playerId` | `std::optional<int>` | DB `player_id`, empty until login |
 | `username` | `QString` | Empty until login |
 | `verified` | `bool` | `true` once logged in |
+| `lobbyId` | `std::optional<int>` | The lobby/game they're in; empty on the home screen |
 | `history` | `std::deque<Message>` | Last `kMaxHistory` (100) messages in both directions, secrets redacted |
 
 ### `struct Message`
@@ -140,12 +148,20 @@ The short version:
 
 | Command | Fields | Possible `error` codes |
 |---|---|---|
-| `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
+| `register` | `username`, `email`, `password`, `pin` | `MISSING_FIELDS`, `INVALID_USERNAME`, `INVALID_PASSWORD`, `INVALID_EMAIL`, `INVALID_PIN`, `INVALID_CREDENTIALS`, `SERVER_ERROR` |
 | `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ACCOUNT_LOCKED`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
 | `logout` | _(none)_ | `NOT_LOGGED_IN` |
-| `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `SERVER_ERROR` |
+| `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `ACCOUNT_IN_USE`, `INVALID_PASSWORD`, `SERVER_ERROR` |
+| `start_lobby` | _(none)_ | `NOT_LOGGED_IN`, `ALREADY_IN_LOBBY`, `COULD_NOT_CREATE_LOBBY` |
+| `get_lobbies` | _(none)_ | `NOT_LOGGED_IN` |
+| `join_lobby` | `lobbyId` | `NOT_LOGGED_IN`, `MISSING_FIELDS`, `LOBBY_NOT_FOUND`, `LOBBY_FULL`, `GAME_ALREADY_STARTED`, `ALREADY_IN_LOBBY` |
+| `leave_lobby` | _(none)_ | `NOT_LOGGED_IN`, `NOT_IN_LOBBY` |
+| `start_game` | _(none)_ | `NOT_LOGGED_IN`, `NOT_IN_LOBBY`, `NOT_HOST`, `LOBBY_NOT_FULL`, `GAME_ALREADY_STARTED` |
 | _(server)_ `error` | `error`, `message` | `INVALID_JSON`, `MISSING_REQUEST_ID`, `UNKNOWN_COMMAND` |
 | _(server)_ `server_message` | `text` | — |
+| _(server)_ `player_joined` / `player_left` | `lobbyId`, `username`, `players` | — |
+| _(server)_ `host_left` | `lobbyId`, `username`, `message` | — |
+| _(server)_ `game_started` | `lobbyId`, `players` | — |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -217,12 +233,35 @@ maxConcurrentGames=1
 | View Logged-In Users | Username and IP of each logged-in client | "No users currently logged in" | UC 12 · #65 |
 | View Registered User Count | Number of accounts in the DB | "An error occurred while trying to reach the database." | UC 13 · #74 |
 | View Locked-Out Users | Locked usernames and time until unlock, plus an **Unlock Selected Account** button | "No accounts currently locked" | UC 14 + 7.2 · #73 |
+| View Hearts Games | Every lobby or running game: id, state, players, host | "No games currently running" | Class diagram `displayHeartsGames()` |
 | View Connected User Count | Every open connection, logged in or not | "No accounts currently connected" | UC 15 · #72 |
 
 - **Broadcast box:** works like typing in the terminal.
 - **Staying current:** the window refreshes whenever the server emits `stateChanged()` (connect, disconnect, login, logout, register, lock, unlock), plus every 5 seconds so expired locks drop off.
 - **Where the data comes from:** the window reads through `Server::viewLoggedInUsers()`, `viewConnectedUsers()`, `viewRegisteredUsers()`, `viewLockedAccounts()` and `unlockAccount()`, the same method names as the class diagram.
 - **Threads:** the window runs on the main thread, so it needs no locks.
+
+---
+
+## Game sessions and lobbies (#64, #63 · use cases 8–11)
+
+The server creates one **`GameManager`** per game (class diagram, notes 10/6). Each one holds a
+**`Lobby`**: the players in seat order, host first.
+
+```
+start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [In game]
+                     |     ^
+      join / leave --+-----+        the host leaves (leave_lobby, logout, or disconnect) --> disbanded
+```
+- **Seats:** `players[0]` is the host (`playerNum` 1). The others are in join order. When someone leaves, the players after them move up.
+- **Leaving:** `leave_lobby`, `logout`, and **disconnecting** all go through `Server::leaveLobby()`, so they behave the same.
+- **Host leaves:** everyone gets `host_left` and is taken out of the lobby, and the `GameManager` is deleted (use case 10).
+- **Non-host leaves:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
+- **Starting:** only the host can start, and only with exactly 4 players. The lobby then closes to new players.
+- **Game limit:** `maxConcurrentGames` in `server.ini` (default 1). A new `start_lobby` past the limit gets `COULD_NOT_CREATE_LOBBY`.
+- **Not built yet:** the `Table` (cards, scores) is issue #71 onward. `GameManager::startGame()` marks where it plugs in.
+
+Full message formats are in [PROTOCOL.md](PROTOCOL.md#lobbies-and-game-sessions-use-cases-811-issues-64-and-63).
 
 ---
 
@@ -288,12 +327,20 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
-- [ ] Lobby / tables / seating
-- [ ] Hearts game logic
+- [ ] Table setup, dealing and passing, tricks, scoring, game end, play again (#71, #70, #66, #69, #68, #67)
+- [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
 
 ---
 
 ## Change log
+
+### 2026-11-23 (c) — Game sessions and lobbies (#64, #63)
+- **New classes:** `GameManager` (one per game) and `Lobby`, named after the class diagram.
+- **New commands:** `start_lobby`, `get_lobbies`, `join_lobby`, `leave_lobby`, `start_game`.
+- **New events:** `player_joined`, `player_left`, `host_left`, `game_started`.
+- **Host leaving** (leave, logout, or disconnect) disbands the lobby. Anyone else leaving keeps it open.
+- **Limits:** max concurrent games comes from `server.ini` (default 1).
+- **Monitor window:** new "View Hearts Games" button.
 
 ### 2026-11-23 (b) — Rules from the team meeting notes
 - **Validation:** usernames and passwords are now checked (`INVALID_USERNAME`, `INVALID_PASSWORD`), matching the client's rules.

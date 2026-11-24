@@ -8,6 +8,7 @@
 //
 //   [View Logged-In Users]  [View Registered User Count]
 //   [View Locked-Out Users] [View Connected User Count]
+//   [          View Hearts Games (lobbies)            ]
 //   ------------------------------------------------------
 //   heading, e.g. "Logged-in users: 2"
 //   list of results (or the "No ... currently ..." message)
@@ -49,7 +50,8 @@ private:
         LoggedIn,     // UC 12 / issue #65
         Registered,   // UC 13 / issue #74
         Locked,       // UC 14 / issue #73 (+ unlock, UC 7.2)
-        Connected     // UC 15 / issue #72
+        Connected,    // UC 15 / issue #72
+        Games         // lobbies + running games (class diagram: displayHeartsGames())
     };
 
     void showView(View view);   // switch views (button click)
@@ -62,6 +64,7 @@ private:
     void fillRegistered();
     void fillLocked();
     void fillConnected();
+    void fillGames();
 
     // Shows a single grey message line in the list (empty results, errors).
     void showMessage(const QString& text);
