@@ -76,4 +76,24 @@ public class RequestManager
     {
         sendRequest(MessageFormatter.logout(), callback);
     }
+
+    public static void requestStartLobby(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.startLobby(), callback);
+    }
+
+    public static void requestGetLobbies(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.getLobbies(), callback);
+    }
+
+    public static void requestJoinLobby(int lobbyId, Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.joinLobby(lobbyId), callback);
+    }
+
+    public static void requestLeaveLobby(Consumer<JsonObject> callback)
+    {
+        sendRequest(MessageFormatter.leaveLobby(), callback);
+    }
 }

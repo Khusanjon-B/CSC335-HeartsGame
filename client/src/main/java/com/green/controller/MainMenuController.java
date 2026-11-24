@@ -7,6 +7,11 @@ import com.green.RequestManager;
 public class MainMenuController extends Controller {
 
     @FXML
+    private void browseLobbies() {
+        app.loadPage("lobbyBrowser.fxml");
+    }
+
+    @FXML
     private void logout() {
         RequestManager.requestLogout(response ->
             runOnUiThread(() -> {

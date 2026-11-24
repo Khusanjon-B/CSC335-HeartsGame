@@ -2,9 +2,17 @@ package com.green;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.util.function.Consumer;
 
 public class MessageHandler implements Runnable
 {
+    private static volatile Consumer<JsonObject> lobbyEventHandler;
+
+    public static void setLobbyEventHandler(Consumer<JsonObject> handler)
+    {
+        lobbyEventHandler = handler;
+    }
+
     @Override
     public void run()
     {
@@ -42,10 +50,14 @@ public class MessageHandler implements Runnable
             switch (command)
             {
                 case "game_started":
-                    // Handle game started event
-                    break;
                 case "player_joined":
-                    // Handle player joined event
+                case "player_left":
+                case "host_left":
+                    Consumer<JsonObject> handler = lobbyEventHandler;
+                    if (handler != null)
+                    {
+                        handler.accept(json);
+                    }
                     break;
                 
                 default:

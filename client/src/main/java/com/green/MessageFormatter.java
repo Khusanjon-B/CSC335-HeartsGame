@@ -81,4 +81,33 @@ public class MessageFormatter
         json.addProperty("command", "logout");
         return json.toString();
     }
+
+    public static String startLobby()
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "start_lobby");
+        return json.toString();
+    }
+
+    public static String getLobbies()
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "get_lobbies");
+        return json.toString();
+    }
+
+    public static String joinLobby(int lobbyId)
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "join_lobby");
+        json.addProperty("lobbyId", lobbyId);
+        return json.toString();
+    }
+
+    public static String leaveLobby()
+    {
+        JsonObject json = new JsonObject();
+        json.addProperty("command", "leave_lobby");
+        return json.toString();
+    }
 }
