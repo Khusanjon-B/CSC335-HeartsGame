@@ -44,6 +44,10 @@ struct Connection
     // True once the client has logged in successfully.
     bool verified = false;
 
+    // The lobby / game session this player is in (GameManager::lobbyId()),
+    // or empty if they're on the home screen. A player is in at most one.
+    std::optional<int> lobbyId;
+
     // The last kMaxHistory messages to and from this client, oldest first.
     // Passwords and pins are already replaced with "***".
     // (A deque is like a vector that can also remove from the front cheaply.)

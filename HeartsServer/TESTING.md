@@ -4,7 +4,7 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-23 (covers: connections, protocol, error codes, register, login/logout,
+_Last updated: 2026-11-23 (covers: lobbies/game sessions, connections, protocol, error codes, register, login/logout,
 lockout, password recovery, hashing, history, logging, console, monitoring GUI, DB schema)_
 
 ---
@@ -225,6 +225,33 @@ _Use the "Hearts Server Monitor" window. Open 2–3 `send.py` clients._
 | K4 | Set `port=6000`, restart with no arguments | Listens on 6000; `test_server 5000` still overrides it | |
 | K5 | Set `maxFailedLogins=abc` | Log shows `bad value ... using default 3` | |
 
+## L. Lobbies and game sessions (#64, #63 · use cases 8–11 · test cases 9–12)
+
+_Open 5 `send.py` clients and log each one in (alice, bob, carol, dave, erin). Keep the monitor window on **View Hearts Games**._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| L1 | Not logged in: `{"command":"start_lobby","requestId":1}` | `NOT_LOGGED_IN` | |
+| L2 | alice: `start_lobby` | `lobbyId` 1, `playerNum` 1, `players:["alice"]`; the monitor shows `Lobby 1 [Waiting for players] 1/4` (TC 9) | |
+| L3 | bob: `start_lobby` (`maxConcurrentGames=1`) | `COULD_NOT_CREATE_LOBBY`, "no additional games can be created at this time" (TC 12.1) | |
+| L4 | bob: `get_lobbies` | `lobbies:[{"lobbyId":1,"host":"alice","playerCount":1}]` | |
+| L5 | bob: `join_lobby` with `"lobbyId":99` | `LOBBY_NOT_FOUND` | |
+| L6 | bob: `join_lobby` with `"lobbyId":1` | `playerNum` 2, `players:["alice","bob"]`, `host:"alice"`; alice gets `player_joined` (TC 10) | |
+| L7 | bob: `join_lobby` 1 again | `ALREADY_IN_LOBBY` | |
+| L8 | alice: `start_game` with 2/4 | `LOBBY_NOT_FULL` ("not enough players… (2/4)") | |
+| L9 | bob: `start_game` | `NOT_HOST` | |
+| L10 | carol and dave join | Each existing member gets `player_joined`; dave's `playerNum` is 4 | |
+| L11 | erin: `join_lobby` 1 | `LOBBY_FULL` | |
+| L12 | carol: `leave_lobby` | Success; the others get `player_left` with `players:["alice","bob","dave"]` (dave moved up); the lobby stays open (TC 12.2) | |
+| L13 | carol: close `send.py` instead (after rejoining) | Same as L12: the others get `player_left` | |
+| L14 | Lobby full again, alice: `start_game` | Success; **all 4** get `game_started` with `players`; the monitor shows `[In game]` (TC 12) | |
+| L15 | erin: `join_lobby` 1 / `get_lobbies` | `GAME_ALREADY_STARTED` / `lobbies:[]` | |
+| L16 | alice (host) sends `leave_lobby` | The others get `host_left` ("The host left, so the game was disbanded."); the lobby is gone from the monitor (TC 11) | |
+| L17 | After L16, bob sends `leave_lobby` | `NOT_IN_LOBBY` (the server already removed him) | |
+| L18 | Make a lobby, then the host **logs out** / **closes the client** | Same as L16 | |
+| L19 | After a lobby is disbanded, erin: `start_lobby` | Success (the game slot is free again) | |
+| L20 | Set `maxConcurrentGames=2`, restart; two hosts `start_lobby` | Both succeed; `get_lobbies` lists both | |
+
 ---
 
 ## Failures
@@ -240,5 +267,6 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ## Change log
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).
+- **2026-11-23 (c):** Section L (lobbies and game sessions, #64 and #63).
 - **2026-11-23 (b):** Strong example passwords (the server now enforces the client's password rule); C14–C19 (username, password, unique email); E10–E11; section K (`server.ini`).
 - **2026-11-23:** Added section I (lockout, #54) and section J (Server Monitoring GUI, #65/#72/#73/#74); H6 (v2→v3 upgrade); A1 mentions the GUI.

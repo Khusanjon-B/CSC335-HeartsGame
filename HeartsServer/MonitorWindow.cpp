@@ -37,18 +37,21 @@ MonitorWindow::MonitorWindow(Server& server, QWidget* parent)
     auto* registeredBtn = new QPushButton("View Registered User Count");
     auto* lockedBtn     = new QPushButton("View Locked-Out Users");
     auto* connectedBtn  = new QPushButton("View Connected User Count");
+    auto* gamesBtn      = new QPushButton("View Hearts Games");
 
     auto* buttons = new QGridLayout;
     buttons->addWidget(loggedInBtn,   0, 0);
     buttons->addWidget(registeredBtn, 0, 1);
     buttons->addWidget(lockedBtn,     1, 0);
     buttons->addWidget(connectedBtn,  1, 1);
+    buttons->addWidget(gamesBtn,      2, 0, 1, 2);   // row 2, spans both columns
 
     // Each button just switches the view. Lambdas let us pass which view.
     connect(loggedInBtn,   &QPushButton::clicked, this, [this] { showView(View::LoggedIn); });
     connect(registeredBtn, &QPushButton::clicked, this, [this] { showView(View::Registered); });
     connect(lockedBtn,     &QPushButton::clicked, this, [this] { showView(View::Locked); });
     connect(connectedBtn,  &QPushButton::clicked, this, [this] { showView(View::Connected); });
+    connect(gamesBtn,      &QPushButton::clicked, this, [this] { showView(View::Games); });
 
     // ---- heading + results list + unlock button ----
     m_heading = new QLabel;
@@ -115,6 +118,7 @@ void MonitorWindow::refresh()
     case View::Registered: fillRegistered(); break;
     case View::Locked:     fillLocked();     break;
     case View::Connected:  fillConnected();  break;
+    case View::Games:      fillGames();      break;
     }
 }
 
@@ -177,6 +181,20 @@ void MonitorWindow::fillConnected()
 
     for (const auto& c : clients)
         m_list->addItem(c.ip + "    " + (c.loggedIn ? c.username : QString("(not logged in)")));
+}
+
+// ---- Hearts games: every lobby / running game and who's in it ----
+void MonitorWindow::fillGames()
+{
+    const auto games = m_server.viewHeartsGames();
+    m_heading->setText(QString("Hearts games: %1").arg(games.size()));
+    if (games.empty())
+        return showMessage("No games currently running");
+
+    for (const auto& g : games)
+        m_list->addItem(QString("Lobby %1  [%2]  %3/4:  %4  (host: %5)")
+                            .arg(g.lobbyId).arg(g.state).arg(g.players.size())
+                            .arg(g.players.join(", ")).arg(g.players.value(0)));
 }
 
 // ---- UC 7.2: Admin unlocks account ----

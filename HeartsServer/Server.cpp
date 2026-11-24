@@ -30,6 +30,7 @@
 #include "PasswordHasher.h"
 
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QNetworkInterface>
@@ -121,6 +122,11 @@ void Server::registerHandlers()
     m_handlers["login"]            = &Server::handleLogin;
     m_handlers["logout"]           = &Server::handleLogout;
     m_handlers["recover_password"] = &Server::handleRecoverPassword;
+    m_handlers["start_lobby"]      = &Server::handleStartLobby;
+    m_handlers["get_lobbies"]      = &Server::handleGetLobbies;
+    m_handlers["join_lobby"]       = &Server::handleJoinLobby;
+    m_handlers["leave_lobby"]      = &Server::handleLeaveLobby;
+    m_handlers["start_game"]       = &Server::handleStartGame;
 }
 
 bool Server::start(quint16 port)
@@ -225,6 +231,10 @@ Connection* Server::findConnectionByPlayer(int playerId)
 
 void Server::logoutConnection(Connection& conn)
 {
+    // Logging out (or disconnecting) also leaves any lobby, so the other
+    // players are told and a host's lobby is disbanded (use case 10).
+    leaveLobby(conn);
+
     if (conn.playerId)
         m_db.markLoggedOut(*conn.playerId);
 
@@ -514,6 +524,236 @@ void Server::handleRecoverPassword(Connection& conn, const Message& request)
 
     logMessage("[Auth] password reset for \"" + username + "\"");
     replyOk(conn, request, "password changed, you can now log in");
+}
+
+// ===========================================================================
+//  Game sessions / lobbies (issue #64 "Create and maintain game sessions",
+//  issue #63 "Host leaves lobby"; use cases 8, 9, 10, 11)
+//
+//  Messages follow the team's JSON doc (start_lobby, join_lobby,
+//  get_lobbies, player_joined, player_left, host_left), with lobbyId as a
+//  number. Everyone's "playerNum" is their index in "players" + 1, so the
+//  host is always playerNum 1 and players[0].
+// ===========================================================================
+
+bool Server::requireLogin(Connection& conn, const Message& request)
+{
+    if (conn.verified)
+        return true;
+    replyFail(conn, request, ErrorCode::NotLoggedIn, "you need to log in first");
+    return false;
+}
+
+GameManager* Server::findGame(int lobbyId)
+{
+    for (auto& game : m_games)
+        if (game->lobbyId() == lobbyId)
+            return game.get();
+    return nullptr;
+}
+
+void Server::sendToLobby(const GameManager& game, const QString& command, QJsonObject fields,
+                         int skipPlayerId)
+{
+    // Server-initiated, so a negative id; the same id for every copy.
+    const qint64 id = m_nextServerRequestId--;
+    fields["lobbyId"] = game.lobbyId();
+    for (const LobbyPlayer& p : game.lobby().players()) {
+        if (p.playerId == skipPlayerId)
+            continue;
+        if (Connection* c = findConnectionByPlayer(p.playerId))
+            sendMessage(*c, command, id, fields);
+    }
+}
+
+// start_lobby  {}  ->  start_lobby_result {lobbyId, playerNum, host, players}
+// Use case 8 (Start a New Lobby) + use case 11 steps 1-2 (create a session
+// with a unique id). The requester becomes the host.
+void Server::handleStartLobby(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+    if (conn.lobbyId)
+        return replyFail(conn, request, ErrorCode::AlreadyInLobby,
+                         "you're already in lobby " + QString::number(*conn.lobbyId));
+
+    // Use case 11 extension: concurrent-game limit (server.ini, default 1).
+    if (static_cast<int>(m_games.size()) >= m_config.maxConcurrentGames)
+        return replyFail(conn, request, ErrorCode::CouldNotCreateLobby,
+                         "no additional games can be created at this time");
+
+    const int lobbyId = m_nextLobbyId++;
+    m_games.push_back(std::make_unique<GameManager>(lobbyId, LobbyPlayer{*conn.playerId, conn.username}));
+    conn.lobbyId = lobbyId;
+    const GameManager& game = *m_games.back();
+
+    logMessage("[Game] \"" + conn.username + "\" created lobby " + QString::number(lobbyId));
+    replyOk(conn, request, "lobby created, waiting for players",
+            {{"lobbyId", lobbyId}, {"playerNum", 1},
+             {"host", conn.username}, {"players", game.lobby().playerNames()}});
+    emit stateChanged();
+}
+
+// get_lobbies  {}  ->  get_lobbies_result {lobbies: [{lobbyId, host, playerCount}, ...]}
+// Team notes 9/29: every lobby is listed publicly; anyone can join one with
+// fewer than 4 players. Games that already started aren't listed.
+void Server::handleGetLobbies(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+
+    QJsonArray lobbies;
+    for (const auto& game : m_games)
+        if (game->state() == GameManager::State::WaitingForPlayers)
+            lobbies.append(game->summary());
+
+    replyOk(conn, request,
+            lobbies.isEmpty() ? "no open lobbies" : QString("%1 open lobby(s)").arg(lobbies.size()),
+            {{"lobbies", lobbies}});
+}
+
+// join_lobby {lobbyId}  ->  join_lobby_result {lobbyId, playerNum, host, players}
+// and everyone already in the lobby gets player_joined {lobbyId, username, players}.
+// Use case 9 + use case 11 step 3 (assign joining players, up to four).
+void Server::handleJoinLobby(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+
+    const qint64 lobbyId = request.body.value("lobbyId").toInteger(-1);
+    if (lobbyId < 0)
+        return replyFail(conn, request, ErrorCode::MissingFields, "lobbyId (a number) is required");
+    if (conn.lobbyId)
+        return replyFail(conn, request, ErrorCode::AlreadyInLobby,
+                         "you're already in lobby " + QString::number(*conn.lobbyId));
+
+    GameManager* game = findGame(static_cast<int>(lobbyId));
+    if (!game)
+        return replyFail(conn, request, ErrorCode::LobbyNotFound, "that lobby doesn't exist");
+
+    switch (game->addPlayerToLobby({*conn.playerId, conn.username})) {
+    case GameManager::JoinResult::AlreadyStarted:
+        return replyFail(conn, request, ErrorCode::GameAlreadyStarted, "that game has already started");
+    case GameManager::JoinResult::Full:
+        return replyFail(conn, request, ErrorCode::LobbyFull, "that lobby is full");
+    case GameManager::JoinResult::AlreadyInLobby:
+        return replyFail(conn, request, ErrorCode::AlreadyInLobby, "you're already in that lobby");
+    case GameManager::JoinResult::Ok:
+        break;
+    }
+
+    conn.lobbyId = game->lobbyId();
+    const Lobby& lobby = game->lobby();
+    logMessage("[Game] \"" + conn.username + "\" joined lobby " + QString::number(game->lobbyId()) +
+               QString(" (%1/%2)").arg(lobby.playerCount()).arg(Lobby::kMaxPlayers));
+
+    replyOk(conn, request, "joined lobby",
+            {{"lobbyId", game->lobbyId()}, {"playerNum", lobby.playerNum(*conn.playerId)},
+             {"host", lobby.host().username}, {"players", lobby.playerNames()}});
+    // Tell everyone else (use case 11 step 4: keep each player's state current).
+    sendToLobby(*game, "player_joined",
+                {{"username", conn.username}, {"players", lobby.playerNames()}},
+                *conn.playerId);
+    emit stateChanged();
+}
+
+// leave_lobby {}  ->  leave_lobby_result
+// Uses leaveLobby(), the same path as logout and disconnect.
+void Server::handleLeaveLobby(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+    if (!conn.lobbyId)
+        return replyFail(conn, request, ErrorCode::NotInLobby, "you're not in a lobby");
+
+    leaveLobby(conn);
+    replyOk(conn, request, "left the lobby");
+}
+
+void Server::leaveLobby(Connection& conn)
+{
+    if (!conn.lobbyId || !conn.playerId)
+        return;
+    const int lobbyId = *conn.lobbyId;
+    conn.lobbyId.reset();
+
+    GameManager* game = findGame(lobbyId);
+    if (!game)
+        return;
+
+    const bool wasHost = game->removePlayer(*conn.playerId);
+
+    if (wasHost) {
+        // Use case 10 / issue #63: the host left, so the session is
+        // disbanded. Everyone still in it gets host_left and goes back to
+        // the home screen (their lobbyId is cleared).
+        logMessage("[Game] host \"" + conn.username + "\" left lobby " + QString::number(lobbyId) +
+                   "; lobby disbanded");
+        sendToLobby(*game, "host_left",
+                    {{"username", conn.username},
+                     {"message", "The host left, so the game was disbanded."}});
+        for (const LobbyPlayer& p : game->lobby().players())
+            if (Connection* c = findConnectionByPlayer(p.playerId))
+                c->lobbyId.reset();
+
+        m_games.erase(std::remove_if(m_games.begin(), m_games.end(),
+                                     [lobbyId](const auto& g) { return g->lobbyId() == lobbyId; }),
+                      m_games.end());   // deletes the GameManager
+    } else {
+        // Use case 11 extension: a player left before the session filled
+        // up. Keep the lobby open and tell the others (who's left, new seats).
+        // (If the game had already started, the gameplay issues will decide
+        //  whether to wait for them to come back; see test case 19.2.)
+        logMessage("[Game] \"" + conn.username + "\" left lobby " + QString::number(lobbyId));
+        sendToLobby(*game, "player_left",
+                    {{"username", conn.username}, {"players", game->lobby().playerNames()}});
+    }
+    emit stateChanged();
+}
+
+// start_game {}  ->  start_game_result, then everyone gets
+// game_started {lobbyId, players}. Host only, lobby must be full (4).
+// Team notes 9/29: "Host can start the game". Use case 11 step 5.
+void Server::handleStartGame(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+    GameManager* game = conn.lobbyId ? findGame(*conn.lobbyId) : nullptr;
+    if (!game)
+        return replyFail(conn, request, ErrorCode::NotInLobby, "you're not in a lobby");
+
+    switch (game->startGame(*conn.playerId)) {
+    case GameManager::StartResult::NotHost:
+        return replyFail(conn, request, ErrorCode::NotHost, "only the host can start the game");
+    case GameManager::StartResult::NotFull:
+        return replyFail(conn, request, ErrorCode::LobbyNotFull,
+                         QString("not enough players to start the game (%1/%2)")
+                             .arg(game->lobby().playerCount()).arg(Lobby::kMaxPlayers));
+    case GameManager::StartResult::AlreadyStarted:
+        return replyFail(conn, request, ErrorCode::GameAlreadyStarted, "the game has already started");
+    case GameManager::StartResult::Ok:
+        break;
+    }
+
+    logMessage("[Game] lobby " + QString::number(game->lobbyId()) + " started by \"" +
+               conn.username + "\"");
+    replyOk(conn, request, "game started");
+    sendToLobby(*game, "game_started", {{"players", game->lobby().playerNames()}});
+    emit stateChanged();
+}
+
+std::vector<Server::GameInfo> Server::viewHeartsGames() const
+{
+    std::vector<GameInfo> result;
+    for (const auto& game : m_games) {
+        GameInfo info;
+        info.lobbyId = game->lobbyId();
+        info.state = game->stateText();
+        for (const LobbyPlayer& p : game->lobby().players())
+            info.players << p.username;
+        result.push_back(info);
+    }
+    return result;
 }
 
 // ===========================================================================

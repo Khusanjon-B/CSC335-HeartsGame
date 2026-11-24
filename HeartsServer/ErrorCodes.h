@@ -44,6 +44,16 @@ inline const QString AccountLocked      = "ACCOUNT_LOCKED";      // 3 failed log
 // ---- logout ----
 inline const QString NotLoggedIn      = "NOT_LOGGED_IN";       // nothing to log out of
 
+// ---- lobbies / game sessions (use cases 8-11; names from the protocol doc) ----
+inline const QString CouldNotCreateLobby = "COULD_NOT_CREATE_LOBBY"; // max concurrent games reached (server.ini)
+inline const QString LobbyNotFound       = "LOBBY_NOT_FOUND";        // no lobby with that lobbyId
+inline const QString LobbyFull           = "LOBBY_FULL";             // already 4 players
+inline const QString GameAlreadyStarted  = "GAME_ALREADY_STARTED";   // lobby closed when the game started
+inline const QString AlreadyInLobby      = "ALREADY_IN_LOBBY";       // leave your current lobby first
+inline const QString NotInLobby          = "NOT_IN_LOBBY";           // leave/start without being in a lobby
+inline const QString NotHost             = "NOT_HOST";               // only the host can start the game
+inline const QString LobbyNotFull        = "LOBBY_NOT_FULL";         // need 4 players to start
+
 // ---- recover_password ----
 inline const QString RecoveryFailed   = "RECOVERY_FAILED";     // username/email/pin don't match
 }

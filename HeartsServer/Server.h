@@ -35,12 +35,15 @@
 #include "Config.h"
 #include "Connection.h"
 #include "Database.h"
+#include "GameManager.h"
 #include "Message.h"
 
 #include <QHash>
 #include <QJsonObject>
 #include <QObject>
+#include <QStringList>
 #include <QTcpServer>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -81,9 +84,19 @@ public:
     std::optional<std::vector<LockedAccount>> viewLockedAccounts();   // (#73); nullopt = DB error
     bool unlockAccount(const QString& username);          // admin unlock (use case 7.2)
 
+    // One game session, as the admin sees it ("displayHeartsGames()").
+    struct GameInfo
+    {
+        int         lobbyId = 0;
+        QString     state;     // "Waiting for players" / "In game"
+        QStringList players;   // seat order, host first
+    };
+    std::vector<GameInfo> viewHeartsGames() const;
+
 signals:
     // Emitted whenever something the admin can see changes: a client
-    // connects/disconnects, logs in/out, registers, gets locked or unlocked.
+    // connects/disconnects, logs in/out, registers, gets locked or unlocked,
+    // or a lobby/game is created, joined, left, started or disbanded.
     // The monitor window connects to this to refresh itself.
     void stateChanged();
 
@@ -111,6 +124,29 @@ private:
     void handleLogin(Connection& conn, const Message& request);
     void handleLogout(Connection& conn, const Message& request);
     void handleRecoverPassword(Connection& conn, const Message& request);
+
+    // ---- game sessions / lobbies (issue #64, #63; use cases 8-11) ----
+    void handleStartLobby(Connection& conn, const Message& request);   // create + become host
+    void handleGetLobbies(Connection& conn, const Message& request);   // public list of open lobbies
+    void handleJoinLobby(Connection& conn, const Message& request);    // join by lobbyId
+    void handleLeaveLobby(Connection& conn, const Message& request);   // leave (host leaving disbands)
+    void handleStartGame(Connection& conn, const Message& request);    // host starts a full lobby
+
+    // Replies NOT_LOGGED_IN and returns false if this connection isn't logged in.
+    bool requireLogin(Connection& conn, const Message& request);
+
+    // The session with this id, or nullptr.
+    GameManager* findGame(int lobbyId);
+
+    // Takes `conn` out of its lobby and tells the others. If it was the host,
+    // the whole session is disbanded (host_left). Used by leave_lobby,
+    // logout and disconnect, so all three behave the same.
+    void leaveLobby(Connection& conn);
+
+    // Sends one server-initiated event to every player in the session
+    // (optionally skipping one), all with the same negative requestId.
+    void sendToLobby(const GameManager& game, const QString& command, QJsonObject fields,
+                     int skipPlayerId = -1);
 
     // ---- sending ----
     // The ONE place messages leave the server: adds command + requestId,
@@ -146,4 +182,10 @@ private:
     std::vector<Connection> m_connections;   // one entry per connected client
     QHash<QString, Handler> m_handlers;      // "login" -> &Server::handleLogin
     qint64                  m_nextServerRequestId = -1;   // -1, -2, -3, ...
+
+    // Every game session (lobby or running game). At most
+    // m_config.maxConcurrentGames of them. unique_ptr = the Server owns them,
+    // and erasing one from the vector deletes it.
+    std::vector<std::unique_ptr<GameManager>> m_games;
+    int m_nextLobbyId = 1;   // lobby ids are 1, 2, 3, ... and never reused while running
 };

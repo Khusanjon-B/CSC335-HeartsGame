@@ -1,6 +1,6 @@
 # Hearts Message Protocol
 
-_Matches the server as of 2026-11-23. This is the source text for the team's
+_Matches the server as of 2026-11-23 (lobbies added). This is the source text for the team's
 "message formats" Google Doc. Paste these sections over the matching ones there._
 
 ---
@@ -227,7 +227,15 @@ Sent by the server on its own, for example when the operator types into the serv
 | `ALREADY_LOGGED_IN` | login |
 | `ACCOUNT_IN_USE` | login, recover_password |
 | `ACCOUNT_LOCKED` | login |
-| `NOT_LOGGED_IN` | logout |
+| `NOT_LOGGED_IN` | logout, all lobby commands |
+| `ALREADY_IN_LOBBY` | start_lobby, join_lobby |
+| `COULD_NOT_CREATE_LOBBY` | start_lobby |
+| `LOBBY_NOT_FOUND` | join_lobby |
+| `LOBBY_FULL` | join_lobby |
+| `GAME_ALREADY_STARTED` | join_lobby, start_game |
+| `NOT_IN_LOBBY` | leave_lobby, start_game |
+| `NOT_HOST` | start_game |
+| `LOBBY_NOT_FULL` | start_game |
 | `RECOVERY_FAILED` | recover_password |
 | `SERVER_ERROR` | register, recover_password |
 | `INVALID_JSON` | error |
@@ -238,9 +246,100 @@ Defined in `HeartsServer/ErrorCodes.h`.
 
 ---
 
-## Not implemented yet
+## Lobbies and game sessions (use cases 8–11, issues #64 and #63)
 
-The lobby messages in the Google Doc (`start_lobby`, `join_lobby`, `get_lobbies`,
-`player_joined`, `player_left`, `host_left`) aren't on the server yet. When they're built,
-they should follow the **Default** rules above: flat fields, `requestId`, and `error`
-codes in the `*_result` replies.
+You must be **logged in** for every command here. If you're not, the reply is `NOT_LOGGED_IN`.
+
+**How seats work:** `players` is the list of usernames **in seat order**. `players[0]` is always the **host**.
+Your `playerNum` is your position + 1, so the host is always `playerNum` 1. When someone leaves,
+the players after them move up a seat. The server sends the new `players` list every time it changes,
+so clients just redraw from it.
+
+**Limits:** a lobby holds 4 players. Only `maxConcurrentGames` lobbies/games can exist at once
+(`server.ini`, default **1**).
+
+### Start a lobby (`start_lobby`)
+```json
+{"command": "start_lobby", "requestId": 5}
+```
+```json
+{"command": "start_lobby_result", "requestId": 5, "success": true, "error": "", "message": "lobby created, waiting for players", "lobbyId": 1, "playerNum": 1, "host": "alice", "players": ["alice"]}
+```
+| `error` | When |
+|---|---|
+| `ALREADY_IN_LOBBY` | You're already in a lobby |
+| `COULD_NOT_CREATE_LOBBY` | The game limit is reached ("no additional games can be created at this time") |
+
+### List open lobbies (`get_lobbies`)
+```json
+{"command": "get_lobbies", "requestId": 6}
+```
+```json
+{"command": "get_lobbies_result", "requestId": 6, "success": true, "error": "", "message": "1 open lobby(s)", "lobbies": [{"lobbyId": 1, "host": "alice", "playerCount": 3}]}
+```
+- **What's listed:** lobbies still waiting for players. Full ones are included, with `playerCount` 4. Started games aren't.
+- **Nothing open:** `lobbies` is `[]`.
+
+### Join a lobby (`join_lobby`)
+```json
+{"command": "join_lobby", "requestId": 7, "lobbyId": 1}
+```
+```json
+{"command": "join_lobby_result", "requestId": 7, "success": true, "error": "", "message": "joined lobby", "lobbyId": 1, "playerNum": 2, "host": "alice", "players": ["alice", "bob"]}
+```
+| `error` | When |
+|---|---|
+| `MISSING_FIELDS` | No `lobbyId`, or it isn't a number |
+| `LOBBY_NOT_FOUND` | No lobby with that id |
+| `LOBBY_FULL` | Already 4 players |
+| `GAME_ALREADY_STARTED` | That game started; the lobby is closed |
+| `ALREADY_IN_LOBBY` | You're already in a lobby (leave it first) |
+
+### Leave a lobby (`leave_lobby`)
+```json
+{"command": "leave_lobby", "requestId": 8}
+```
+```json
+{"command": "leave_lobby_result", "requestId": 8, "success": true, "error": "", "message": "left the lobby"}
+```
+| `error` | When |
+|---|---|
+| `NOT_IN_LOBBY` | You're not in a lobby |
+
+- **Disconnects and logouts count as leaving.** **Logging out** or **disconnecting** leaves your lobby the same way.
+- **If the host leaves,** in any of those ways, the lobby is **disbanded** and everyone else gets `host_left` (use case 10).
+
+### Start the game (`start_game`), host only
+```json
+{"command": "start_game", "requestId": 9}
+```
+```json
+{"command": "start_game_result", "requestId": 9, "success": true, "error": "", "message": "game started"}
+```
+| `error` | When |
+|---|---|
+| `NOT_IN_LOBBY` | You're not in a lobby |
+| `NOT_HOST` | Only the host can start |
+| `LOBBY_NOT_FULL` | Fewer than 4 players ("not enough players to start the game (3/4)") |
+| `GAME_ALREADY_STARTED` | It's already running |
+
+Once a game starts, its lobby closes. It disappears from `get_lobbies`, and `join_lobby` gets `GAME_ALREADY_STARTED`.
+
+### Events the server sends (negative `requestId`)
+| `command` | Sent to | Fields |
+|---|---|---|
+| `player_joined` | Everyone already in the lobby | `lobbyId`, `username` (who joined), `players` |
+| `player_left` | Everyone still in the lobby | `lobbyId`, `username` (who left), `players` |
+| `host_left` | Everyone still in the lobby, which **no longer exists** | `lobbyId`, `username` (the host), `message` |
+| `game_started` | Everyone in the lobby, host included | `lobbyId`, `players` (seat order) |
+
+```json
+{"command": "player_joined", "requestId": -3, "lobbyId": 1, "username": "dave", "players": ["alice", "bob", "carol", "dave"]}
+{"command": "host_left", "requestId": -8, "lobbyId": 1, "username": "alice", "message": "The host left, so the game was disbanded."}
+```
+**Client note for `host_left`:** stop the game, show the "host left" popup, and go back to the home screen.
+The server has already taken you out of the lobby.
+
+> **Not built yet:** the table itself (seats, scores 0, cards) is issue #71 onward and will start right after
+> `game_started`. If a player disconnects **during** a game, the others get `player_left`. Test case 19.2
+> (wait for them to come back) belongs to the gameplay issues.
