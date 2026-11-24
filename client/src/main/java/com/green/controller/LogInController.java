@@ -24,7 +24,7 @@ public class LogInController extends Controller{
         RequestManager.requestLogin(usernameField.getText(), passwordField.getText(), response ->
             runOnUiThread(() -> {
                 if (responseSucceeded(response)) {
-                    Player.setupPlayer(response.get("playerId").getAsInt(), usernameField.getText());
+                    Player.setupPlayer(response.get("playerId").getAsInt(), response.get("username").getAsString());
                     app.loadPage("mainMenu.fxml");
                 } else {
                     errorMessage.setText(responseError(response, "Login failed."));
