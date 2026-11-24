@@ -6,6 +6,7 @@ import java.util.List;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.green.LobbyJson;
 import com.green.Player;
 import com.green.RequestManager;
 
@@ -72,7 +73,7 @@ public class LobbyBrowserController extends Controller {
                 JsonObject lobby = element.getAsJsonObject();
                 entries.add(new LobbyEntry(
                     lobby.get("lobbyId").getAsInt(),
-                    lobby.get("host").getAsString(),
+                    LobbyJson.hostName(lobby),
                     lobby.get("playerCount").getAsInt()));
             }
             lobbyTable.getItems().setAll(entries);
@@ -121,15 +122,13 @@ public class LobbyBrowserController extends Controller {
     }
 
     private void enterLobby(JsonObject response) {
+        Player currentPlayer = Player.getCurrentPlayer();
         JsonArray responsePlayers = response.getAsJsonArray("players");
-        List<String> players = new ArrayList<>();
-        for (JsonElement player : responsePlayers) {
-            players.add(player.getAsString());
-        }
-        Player.getCurrentPlayer().joinGame(
-            response.get("playerNum").getAsInt(),
+        List<String> players = LobbyJson.playerNames(responsePlayers);
+        currentPlayer.joinGame(
+            LobbyJson.playerNumber(response, currentPlayer),
             response.get("lobbyId").getAsInt(),
-            response.get("host").getAsString(),
+            LobbyJson.hostName(response),
             players);
         app.loadPage("lobby.fxml");
     }

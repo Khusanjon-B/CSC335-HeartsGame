@@ -1,7 +1,10 @@
 package com.green.controller;
 
-import com.google.gson.JsonArray;
+import java.util.ArrayList;
+import java.util.List;
+
 import com.google.gson.JsonObject;
+import com.green.LobbyJson;
 import com.green.MessageHandler;
 import com.green.Player;
 import com.green.RequestManager;
@@ -101,11 +104,21 @@ public class LobbyController extends Controller {
                 return;
             }
             if (event.has("players")) {
-                JsonArray names = event.getAsJsonArray("players");
-                java.util.List<String> players = new java.util.ArrayList<>();
-                for (int i = 0; i < names.size(); i++) {
-                    players.add(names.get(i).getAsString());
+                player.setLobbyPlayers(LobbyJson.playerNames(event.getAsJsonArray("players")));
+                renderPlayers();
+                updateLobbyControls();
+            } else if ("player_joined".equals(command) && event.has("username")) {
+                List<String> players = new ArrayList<>(player.getLobbyPlayers());
+                String username = event.get("username").getAsString();
+                if (!players.contains(username)) {
+                    players.add(username);
+                    player.setLobbyPlayers(players);
+                    renderPlayers();
+                    updateLobbyControls();
                 }
+            } else if ("player_left".equals(command) && event.has("username")) {
+                List<String> players = new ArrayList<>(player.getLobbyPlayers());
+                players.remove(event.get("username").getAsString());
                 player.setLobbyPlayers(players);
                 renderPlayers();
                 updateLobbyControls();
