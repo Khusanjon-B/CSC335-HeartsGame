@@ -1,11 +1,11 @@
 package com.green;
 import java.util.Scanner;
-public class ConsoleManager 
+public class ConsoleManager
 {
-    private Scanner scn = new Scanner(System.in); //scanner not close since that would also close system.in
-    public void start() 
+    private Scanner scn = new Scanner(System.in);
+
+    public void start()
     {
-        
         System.out.println("== Hearts Game ==");
 
         while (true)
@@ -22,9 +22,8 @@ public class ConsoleManager
             System.out.println("5. Logout");
 
             System.out.print("Enter your choice: ");
-
             String choice = scn.next();
-            switch (choice) 
+            switch (choice)
             {
                 case "1":
                     System.out.println("Login selected");
@@ -50,6 +49,7 @@ public class ConsoleManager
             }
         }
     }
+
     private void logout()
     {
         if (Player.getCurrentPlayer() == null)
@@ -60,20 +60,27 @@ public class ConsoleManager
 
         RequestManager.requestLogout(response ->
             {
-                if (response.has("success") && response.get("success").getAsBoolean())
+                boolean success = response.has("success")
+                        && response.get("success").getAsBoolean();
+                boolean notLoggedIn = response.has("error")
+                        && "NOT_LOGGED_IN".equals(response.get("error").getAsString());
+
+                if (success || notLoggedIn)
                 {
                     Player.resetPlayer();
-                    System.out.println("Logout successful");
+                    System.out.println(success ? "Logout successful" : "The session was already logged out.");
                 }
                 else
                 {
-                    String error = response.has("error")
-                        ? response.get("error").getAsString() : "Unknown error";
+                    String error = response.has("message")
+                        ? response.get("message").getAsString()
+                        : response.has("error") ? response.get("error").getAsString() : "Unknown error";
                     System.out.println("Logout failed: " + error);
                 }
             }
         );
     }
+
     private void login()
     {
         System.out.println("== Login ==");
@@ -91,7 +98,9 @@ public class ConsoleManager
                     if (success)
                     {
                         System.out.println("Login successful");
-                        Player.setupPlayer(response.get("playerId").getAsInt(), username);
+                        Player.setupPlayer(
+                            response.get("playerId").getAsInt(),
+                            response.get("username").getAsString());
                     }
                     else
                     {
@@ -117,9 +126,8 @@ public class ConsoleManager
         {
             System.out.println("Could not send login request: " + e.getMessage());
         }
-        //System.out.println("Login attempt for user: " + username);
-        //System.out.println("Login attempt sent. Awaiting server response.");
     }
+
     private void createAccount()
     {
         System.out.println("== Create Account ==");
@@ -129,7 +137,7 @@ public class ConsoleManager
         String username = scn.next();
         System.out.print("Password: ");
         String password = scn.next();
-    
+
         System.out.print("Confirm Password: ");
         String confirmPassword = scn.next();
         if (!password.equals(confirmPassword))
@@ -152,25 +160,25 @@ public class ConsoleManager
                     }
                     else
                     {
-                        String error = response.has("error")
-                        ? response.get("error").getAsString() : "Unknown error";
+                        String error = response.has("message")
+                            ? response.get("message").getAsString()
+                            : response.has("error") ? response.get("error").getAsString() : "Unknown error";
                         System.out.println("Account creation failed: " + error);
                     }
                 }
             );
-            //System.out.println("Account creation attempt for user: " + username + " with email: " + email);
-            //System.out.println("Account creation attempt sent. Awaiting server response.");
         }
         catch (IllegalArgumentException e)
         {
             System.out.println("Invalid account information: " + e.getMessage());
             return;
-        }    
+        }
         catch (Exception e)
         {
             System.out.println("Could not send account creation request: " + e.getMessage());
         }
     }
+
     private void recoverPassword()
     {
         System.out.println("== Recover Password ==");
@@ -196,7 +204,8 @@ public class ConsoleManager
                     else
                     {
                         String error = response.has("message")
-                        ? response.get("message").getAsString() : "Unknown error";
+                        ? response.get("message").getAsString()
+                        : response.has("error") ? response.get("error").getAsString() : "Unknown error";
                         System.out.println("Password recovery failed: " + error);
                     }
                 }
@@ -208,4 +217,3 @@ public class ConsoleManager
         }
     }
 }
-

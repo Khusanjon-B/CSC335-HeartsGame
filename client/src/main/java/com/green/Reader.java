@@ -16,12 +16,13 @@ public class Reader implements Runnable{
         try{
             in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             while(socket != null && !socket.isClosed() && (response = in.readLine()) != null){
-                //System.out.println("Server says: " + response);
                 MessageBridge.getInQueue().offer(response);
             }
         }catch(Exception e){
             System.out.println("input stream connection ended");
         }
-    }
 
+        Player.resetPlayer();
+        RequestManager.failPendingRequests("Connection to the server was lost.");
+    }
 }

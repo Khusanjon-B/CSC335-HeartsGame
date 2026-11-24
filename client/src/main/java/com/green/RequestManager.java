@@ -7,9 +7,9 @@ import java.util.function.Consumer;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-public class RequestManager 
+public class RequestManager
 {
-    private static final ConcurrentHashMap<Integer, Consumer<JsonObject>> 
+    private static final ConcurrentHashMap<Integer, Consumer<JsonObject>>
     pendingRequests = new ConcurrentHashMap<>();
 
     private static final AtomicInteger nextRequestId = new AtomicInteger(1);
@@ -31,6 +31,20 @@ public class RequestManager
             System.out.println("No pending request found for requestId: " + requestId);
         }
     }
+
+    public static void failPendingRequests(String message)
+    {
+        for (Consumer<JsonObject> callback : pendingRequests.values())
+        {
+            JsonObject response = new JsonObject();
+            response.addProperty("success", false);
+            response.addProperty("error", "CONNECTION_LOST");
+            response.addProperty("message", message);
+            callback.accept(response);
+        }
+        pendingRequests.clear();
+    }
+
     public static void sendRequest(String message, Consumer<JsonObject> callback)
     {
         JsonObject json = JsonParser.parseString(message).getAsJsonObject();

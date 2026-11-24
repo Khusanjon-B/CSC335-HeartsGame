@@ -39,6 +39,18 @@ public class Controller {
                 return error;
             }
         }
+        if (response.has("error")
+                && response.get("error").isJsonPrimitive()
+                && response.getAsJsonPrimitive("error").isString()) {
+            String error = response.get("error").getAsString();
+            if (!error.isBlank()) {
+                return error;
+            }
+        }
         return fallback;
+    }
+
+    public static void clearLocalSession() {
+        com.green.Player.resetPlayer();
     }
 }
