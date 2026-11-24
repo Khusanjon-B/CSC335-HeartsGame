@@ -22,6 +22,8 @@ accounts, and unlock them. No game logic yet.
 | Login / logout (issue #59) | ✅ Working (tested) |
 | `error` code in every reply | ✅ Working (tested) |
 | Failed-login tracking + 5-minute lockout after 3 tries (issue #54) | ✅ Working (tested) |
+| Username / password rules, one email per account | ✅ Working (tested) |
+| `server.ini` config file | ✅ Working (tested) |
 | Password recovery with a pin | ✅ Working (tested) |
 | Salted SHA-256 for passwords and pins | ✅ Working |
 | Per-connection message history | ✅ Working (last 100 messages) |
@@ -44,6 +46,7 @@ accounts, and unlock them. No game logic yet.
 - **Executable:** `test_server [port]`, default port **5000**
 - **Files the server creates next to the `.exe`** (inside `build/`, which git ignores):
   - `hearts.db`: the database. Delete it to start over.
+  - `server.ini`: settings (see [Config file](#config-file-serverini)). Created with defaults on first run.
   - `logs/server-YYYY-MM-DD.log`: one log file per day, appended to on each run.
 
 Starting the server opens **two windows**:
@@ -69,6 +72,7 @@ Starting the server opens **two windows**:
 | `PROTOCOL.md` | The message protocol spec, written to match the team Google Doc |
 | `Connection.h` | `struct Connection`: one connected client, including its message history |
 | `Log.h/.cpp` | `logMessage()` writes to the terminal and the log file |
+| `Config.h/.cpp` | Reads `server.ini` (port, lockout limits, max games) |
 
 **Comment conventions (issue #35):**
 - **Every file** starts with a block saying what it's for and how it fits in.
@@ -154,6 +158,44 @@ The short version:
 
 ---
 
+## Account rules (from the team notes and the client code)
+
+| Rule | Source | Error code |
+|---|---|---|
+| Username: letters, digits, `_`, `-` only | Notes 9/29, client `validUsername()` | `INVALID_USERNAME` |
+| Password: ≥ 9 characters, with a letter, a digit, and a special character | Client `validPassword()` | `INVALID_PASSWORD` |
+| One email = one account | Notes 10/1, test case 2.2 | `INVALID_CREDENTIALS` ("email already in use") |
+| One login per account at a time | Notes 10/27 | `ACCOUNT_IN_USE` |
+| No password recovery while the account is logged in | Notes 10/27 | `ACCOUNT_IN_USE` |
+
+The notes also mention a 15–128 character password rule. That conflicts with the client's
+rule, so the server follows the client (it's the one already built). The limits are constants
+at the top of `Server.cpp`.
+
+---
+
+## Config file (`server.ini`)
+
+The team notes (9/29, 10/6) say the attempt limit and lock delay belong in an external file:
+
+```ini
+[server]
+port=5000
+
+[lockout]
+maxFailedLogins=3
+lockoutMinutes=5
+
+[games]
+maxConcurrentGames=1
+```
+- **First run:** the file is created next to the exe with these defaults.
+- **Applying changes:** edit the file and restart the server.
+- **Bad values** fall back to the default, with a warning in the log.
+- **The port** can still be overridden on the command line: `test_server 6000`.
+
+---
+
 ## Failed logins and lockout (issue #54, use case 7)
 
 - **Counting:** every wrong password adds 1 to the account's `failed_attempts`. The reply includes the count.
@@ -162,7 +204,7 @@ The short version:
 - **Unlocking:** the lock ends on its own when time runs out. The next login attempt starts counting from 0. An admin can also unlock it early in the GUI.
 - **Resetting:** a successful login resets the count to 0.
 - **Unknown usernames** aren't counted, since there's no account to lock.
-- **Changing the rules:** `kMaxFailedLogins` and `kLockoutMinutes` are at the top of `Server.cpp`.
+- **Changing the rules:** `maxFailedLogins` and `lockoutMinutes` are in `server.ini`.
 
 ---
 
@@ -244,7 +286,7 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 
 - [ ] Team Google Doc still shows `requestID` + `data`; paste in the sections from `PROTOCOL.md`.
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
-- [ ] Emails aren't unique, and there's no email verification.
+- [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
 - [ ] Lobby / tables / seating
 - [ ] Hearts game logic
@@ -252,6 +294,12 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 ---
 
 ## Change log
+
+### 2026-11-23 (b) — Rules from the team meeting notes
+- **Validation:** usernames and passwords are now checked (`INVALID_USERNAME`, `INVALID_PASSWORD`), matching the client's rules.
+- **One email = one account:** `register` rejects an email that's already in use.
+- **Recovery:** refused while the account is logged in (`ACCOUNT_IN_USE`), and `newPassword` must follow the password rule.
+- **New `server.ini` (`Config`):** port, `maxFailedLogins`, `lockoutMinutes`, `maxConcurrentGames`.
 
 ### 2026-11-23 — Lockout + Server Monitoring GUI (#54, #65, #72, #73, #74)
 - 3 wrong passwords in a row lock an account for 5 minutes. `login_result` carries `failed_attempts`, plus `ACCOUNT_LOCKED` and `lockedUntil` when locked.

@@ -37,12 +37,39 @@
 #include <algorithm>
 
 // ---- input rules (change them here) ----
-static constexpr int kMinPinLength = 4;
-static constexpr int kMaxPinLength = 8;
+// (The lockout numbers are in server.ini instead; see Config.h.)
+static constexpr int kMinPinLength      = 4;
+static constexpr int kMaxPinLength      = 8;
+static constexpr int kMinPasswordLength = 9;   // client rule: "longer than 8 characters"
 
-// ---- lockout rules (use case 7 / test case 7, issue #54) ----
-static constexpr int kMaxFailedLogins  = 3;   // this many wrong passwords in a row locks the account
-static constexpr int kLockoutMinutes   = 5;   // how long the lock lasts (or until an admin unlocks)
+// Username: letters, digits, _ and - only (team notes 9/29), so nothing ever
+// needs escaping. Matches the client's validUsername().
+static bool isValidUsername(const QString& username)
+{
+    static const QRegularExpression pattern(R"(^[A-Za-z0-9_-]+$)");
+    return pattern.match(username).hasMatch();
+}
+
+// Password: at least kMinPasswordLength characters, with at least one letter,
+// one digit and one special character. Matches the client's validPassword(),
+// so the server enforces the same rule even if a client skips the check.
+static bool isValidPassword(const QString& password)
+{
+    static const QRegularExpression letter("[A-Za-z]");
+    static const QRegularExpression digit("[0-9]");
+    static const QRegularExpression special("[^A-Za-z0-9]");
+    return password.size() >= kMinPasswordLength &&
+           letter.match(password).hasMatch() &&
+           digit.match(password).hasMatch() &&
+           special.match(password).hasMatch();
+}
+
+// Shown to the player when a password fails isValidPassword().
+static QString passwordRuleText()
+{
+    return QString("password must be at least %1 characters and include a letter, "
+                   "a digit and a special character").arg(kMinPasswordLength);
+}
 
 // Loose email check: something@something.something, no spaces.
 static bool looksLikeEmail(const QString& email)
@@ -74,9 +101,10 @@ static QString describe(const Connection& conn, const Message& msg)
            " " + QString::fromUtf8(QJsonDocument(fields).toJson(QJsonDocument::Compact));
 }
 
-Server::Server(Database& db, QObject* parent)
+Server::Server(Database& db, const ServerConfig& config, QObject* parent)
     : QObject(parent)
     , m_db(db)
+    , m_config(config)
 {
     registerHandlers();
 
@@ -310,9 +338,15 @@ void Server::handleRegister(Connection& conn, const Message& request)
     const QString password = b.value("password").toString();
     const QString pin      = b.value("pin").toString();
 
+    // Checked in this order; the first problem found is the one reported.
     if (username.isEmpty() || email.isEmpty() || password.isEmpty() || pin.isEmpty())
         return replyFail(conn, request, ErrorCode::MissingFields,
                          "username, email, password and pin are all required");
+    if (!isValidUsername(username))
+        return replyFail(conn, request, ErrorCode::InvalidUsername,
+                         "username can only use letters, digits, _ and -");
+    if (!isValidPassword(password))
+        return replyFail(conn, request, ErrorCode::InvalidPassword, passwordRuleText());
     if (!looksLikeEmail(email))
         return replyFail(conn, request, ErrorCode::InvalidEmail,
                          "that email address doesn't look valid");
@@ -321,6 +355,9 @@ void Server::handleRegister(Connection& conn, const Message& request)
                          QString("pin must be a string of %1-%2 digits").arg(kMinPinLength).arg(kMaxPinLength));
     if (m_db.findPlayer(username))
         return replyFail(conn, request, ErrorCode::InvalidCredentials, "username already taken");
+    // "One email = one account" (team notes 10/1, test case 2.2).
+    if (m_db.emailInUse(email))
+        return replyFail(conn, request, ErrorCode::InvalidCredentials, "email already in use");
 
     // Hash both secrets (each gets its own random salt) and save.
     const int newId = m_db.createPlayer(username, email,
@@ -377,14 +414,14 @@ void Server::handleLogin(Connection& conn, const Message& request)
         const int attempts = m_db.recordFailedLogin(player->id);
         logMessage("[Auth] login failed for " + conn.label() + " as \"" + username +
                    "\" (failed attempt " + QString::number(attempts) + " of " +
-                   QString::number(kMaxFailedLogins) + ")");
+                   QString::number(m_config.maxFailedLogins) + ")");
 
-        if (attempts >= kMaxFailedLogins) {
-            player->lockedUntil = QDateTime::currentDateTime().addSecs(kLockoutMinutes * 60);
+        if (attempts >= m_config.maxFailedLogins) {
+            player->lockedUntil = QDateTime::currentDateTime().addSecs(m_config.lockoutMinutes * 60);
             player->failedAttempts = attempts;
             m_db.lockAccount(player->id, player->lockedUntil);
             logMessage("[Auth] account \"" + username + "\" LOCKED for " +
-                       QString::number(kLockoutMinutes) + " minutes");
+                       QString::number(m_config.lockoutMinutes) + " minutes");
             emit stateChanged();   // locked-out list changed
             return replyLocked(conn, request, *player);
         }
@@ -392,7 +429,7 @@ void Server::handleLogin(Connection& conn, const Message& request)
         QJsonObject extra{{"failed_attempts", attempts}};
         return replyFail(conn, request, ErrorCode::InvalidCredentials,
                          QString("wrong username or password (%1 of %2 attempts used)")
-                             .arg(attempts).arg(kMaxFailedLogins),
+                             .arg(attempts).arg(m_config.maxFailedLogins),
                          extra);
     }
 
@@ -462,6 +499,15 @@ void Server::handleRecoverPassword(Connection& conn, const Message& request)
                          "those recovery details don't match our records");
     }
 
+    // Team notes 10/27: no password recovery while the account is logged in
+    // somewhere. (After a reset, the player has to log in again.)
+    if (findConnectionByPlayer(player->id))
+        return replyFail(conn, request, ErrorCode::AccountInUse,
+                         "this account is logged in right now; log out before recovering the password");
+
+    if (!isValidPassword(newPassword))
+        return replyFail(conn, request, ErrorCode::InvalidPassword, passwordRuleText());
+
     // New password gets a new salt too.
     if (!m_db.updatePassword(player->id, PasswordHasher::hash(newPassword)))
         return replyFail(conn, request, ErrorCode::ServerError, "could not update password");
@@ -524,7 +570,7 @@ void Server::replyLocked(Connection& conn, const Message& request, const PlayerR
     extra["lockedUntil"]     = player.lockedUntil.toString(Qt::ISODate);
     replyFail(conn, request, ErrorCode::AccountLocked,
               QString("account locked after %1 failed attempts, try again in %2 minute(s)")
-                  .arg(kMaxFailedLogins).arg(minutesLeft),
+                  .arg(m_config.maxFailedLogins).arg(minutesLeft),
               extra);
 }
 

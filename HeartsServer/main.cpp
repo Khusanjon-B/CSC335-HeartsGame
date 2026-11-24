@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
 // main.cpp - Hearts server entry point.
 //
-// Usage: test_server [port]   (default 5000)
+// Usage: test_server [port]   (default: the port in server.ini, normally 5000)
 //
 // What main does:
-//   1. Opens the log file (logs/server-YYYY-MM-DD.log next to the .exe).
+//   1. Opens the log file (logs/server-YYYY-MM-DD.log next to the .exe)
+//      and reads settings from server.ini (see Config.h).
 //   2. Opens the SQLite database (hearts.db next to the .exe).
 //   3. Starts the TCP Server.
 //   4. Opens the Server Monitoring GUI window (MonitorWindow).
@@ -17,6 +18,7 @@
 //
 // Files:
 //   Log.h/cpp            - logMessage(): terminal + log file
+//   Config.h/cpp         - server.ini settings (port, lockout, max games)
 //   Message.h            - struct Message, requestId rules, secret redaction
 //   Connection.h         - struct Connection: one connected client
 //   PasswordHasher.h/cpp - salted SHA-256 for passwords and pins
@@ -33,6 +35,7 @@
 //     thread with QMetaObject::invokeMethod, so nothing needs a lock.
 // ---------------------------------------------------------------------------
 
+#include "Config.h"
 #include "Database.h"
 #include "Log.h"
 #include "MonitorWindow.h"
@@ -87,8 +90,11 @@ int main(int argc, char* argv[])
     else
         logMessage("could not open log file " + logPath + " (logging to terminal only)");
 
-    // ---- port from the command line ----
-    quint16 port = 5000;
+    // ---- settings from server.ini (created with defaults on first run) ----
+    ServerConfig config = ServerConfig::load(exeDir + "/server.ini");
+
+    // ---- port: server.ini, unless one is given on the command line ----
+    quint16 port = config.port;
     if (argc > 1) {
         bool ok = false;
         port = QString(argv[1]).toUShort(&ok);
@@ -105,7 +111,7 @@ int main(int argc, char* argv[])
     db.resetAllConnected();   // nobody is connected to a server that just started
 
     // ---- network server ----
-    Server server(db);
+    Server server(db, config);
     if (!server.start(port))
         return 1;
 

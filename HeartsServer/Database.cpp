@@ -172,6 +172,18 @@ int Database::createPlayer(const QString& username, const QString& email,
     return q.lastInsertId().toInt();   // the player_id SQLite just generated
 }
 
+bool Database::emailInUse(const QString& email)
+{
+    QSqlQuery q(m_db);
+    q.prepare("SELECT 1 FROM players WHERE email = ? LIMIT 1");
+    q.addBindValue(email);
+    if (!q.exec()) {
+        logMessage("[DB] emailInUse failed: " + q.lastError().text());
+        return false;
+    }
+    return q.next();   // a row came back = the email is taken
+}
+
 bool Database::updatePassword(int playerId, const PasswordHasher::Hashed& password)
 {
     QSqlQuery q(m_db);

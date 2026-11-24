@@ -32,6 +32,7 @@
 //   4. Document it in PROTOCOL.md.
 // ---------------------------------------------------------------------------
 
+#include "Config.h"
 #include "Connection.h"
 #include "Database.h"
 #include "Message.h"
@@ -49,7 +50,8 @@ class Server : public QObject
 
 public:
     // The Server uses (but doesn't own) the Database created in main().
-    explicit Server(Database& db, QObject* parent = nullptr);
+    // `config` holds the server.ini settings (lockout limits, max games...).
+    explicit Server(Database& db, const ServerConfig& config, QObject* parent = nullptr);
 
     // Starts listening on every IPv4 network card. Returns false on failure.
     bool start(quint16 port);
@@ -139,6 +141,7 @@ private:
 
     // ---- data ----
     Database&               m_db;
+    ServerConfig            m_config;        // copy of the server.ini settings
     QTcpServer              m_tcpServer;
     std::vector<Connection> m_connections;   // one entry per connected client
     QHash<QString, Handler> m_handlers;      // "login" -> &Server::handleLogin

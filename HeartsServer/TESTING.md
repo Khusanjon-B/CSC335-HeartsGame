@@ -84,7 +84,7 @@ add a note under [Failures](#failures).
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
-| C1 | `{"command":"register","requestId":1,"username":"alice","email":"alice@example.com","password":"pw","pin":"0042"}` | `register_result`, success true, error `""`, `playerId` 1 | |
+| C1 | `{"command":"register","requestId":1,"username":"alice","email":"alice@example.com","password":"Hearts#2026","pin":"0042"}` | `register_result`, success true, error `""`, `playerId` 1 | |
 | C2 | Repeat C1 exactly | success false, `INVALID_CREDENTIALS`, `username already taken` | |
 | C3 | Register with `"email"` missing | success false, `MISSING_FIELDS` | |
 | C4 | Register with `"pin"` missing | success false, `MISSING_FIELDS` | |
@@ -94,20 +94,26 @@ add a note under [Failures](#failures).
 | C8 | `"pin":"12a4"` | Same as C6 | |
 | C9 | `"pin":1234` (number, not string) | success false, `MISSING_FIELDS` | |
 | C10 | Register `bob` with `"email":"Bob@Example.COM"` | success true; in the DB, email is `bob@example.com` | |
-| C11 | Check the DB after C1 | Row has a 64-char `password_hash`, 32-char `password_salt`, `pin_hash`, `pin_salt`. **No plain "pw" or "0042" anywhere** | |
+| C11 | Check the DB after C1 | Row has a 64-char `password_hash`, 32-char `password_salt`, `pin_hash`, `pin_salt`. **No plain "Hearts#2026" or "0042" anywhere** | |
 | C12 | Register two users with the same password | Their `password_hash` values are **different** (different salts) | |
 | C13 | After registering, send `{"command":"logout","requestId":9}` | `NOT_LOGGED_IN` (registering doesn't log you in) | |
+| C14 | Register `"username":"bad name!"` | `INVALID_USERNAME` (TC 2.1) | |
+| C15 | Register with `"password":"short1!"` (7 chars) | `INVALID_PASSWORD` (TC 2.1) | |
+| C16 | Register with `"password":"nodigits!!"` | `INVALID_PASSWORD` | |
+| C17 | Register with `"password":"nospecial123"` | `INVALID_PASSWORD` | |
+| C18 | Register a new username with alice's email (any case, e.g. `ALICE@example.com`) | `INVALID_CREDENTIALS`, `email already in use` (TC 2.2) | |
+| C19 | Bad username **and** a taken email together | Only the **first** problem is reported (`INVALID_USERNAME`) | |
 
 ## D. Login and logout
 
-_Needs `alice` / `pw` from C1._
+_Needs `alice` / `Hearts#2026` from C1._
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
 | D1 | `{"command":"login","requestId":1,"username":"alice","password":"wrong"}` | success false, `INVALID_CREDENTIALS` | |
 | D2 | Login as `nobody` | **Same** code and message as D1 | |
 | D3 | Login with an empty password | `MISSING_FIELDS` | |
-| D4 | Login as alice / pw | success true, error `""`, `playerId`, `username` | |
+| D4 | Login as alice / Hearts#2026 | success true, error `""`, `playerId`, `username` | |
 | D5 | Check the DB after D4 | alice: `connected` = 1, `last_logged_in` = now | |
 | D6 | Log in again on the same connection | `ALREADY_LOGGED_IN` | |
 | D7 | In a **second** `send.py`, log in as alice | `ACCOUNT_IN_USE` | |
@@ -126,7 +132,7 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 
 | ID | Send | Expected | Result |
 |---|---|---|---|
-| E1 | `{"command":"recover_password","requestId":1,"username":"alice","email":"alice@example.com","pin":"9999","newPassword":"new"}` | success false, `RECOVERY_FAILED` | |
+| E1 | `{"command":"recover_password","requestId":1,"username":"alice","email":"alice@example.com","pin":"9999","newPassword":"N3wHearts#26"}` | success false, `RECOVERY_FAILED` | |
 | E2 | Correct pin, wrong email | Same code as E1 | |
 | E3 | Unknown username | Same code as E1 | |
 | E4 | Missing `newPassword` | `MISSING_FIELDS` | |
@@ -135,13 +141,15 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 | E7 | Log in with the **new** password | success true | |
 | E8 | Recovery with the email in different case (`ALICE@example.com`) | success true | |
 | E9 | Check the DB after E5 | `password_hash` **and** `password_salt` both changed; pin columns unchanged | |
+| E10 | Log alice in on one client; on another, send a correct recovery | `ACCOUNT_IN_USE` (no recovery while logged in, notes 10/27) | |
+| E11 | Correct recovery with `"newPassword":"weak"` | `INVALID_PASSWORD`; the old password still works | |
 
 ## F. Logging and history
 
 | ID | Steps | Expected | Result |
 |---|---|---|---|
 | F1 | Do C1 and D4, then open `logs/server-<today>.log` | Lines like `>  #1 register {...}` and `<  #1 register_result {...}` | |
-| F2 | Search the log for `pw` and `0042` | Shows only `"***"`; the real values never appear (unless you sent invalid JSON) | |
+| F2 | Search the log for `Hearts#2026` and `0042` | Shows only `"***"`; the real values never appear (unless you sent invalid JSON) | |
 | F3 | Restart the server, check the log | New lines are **added** to the same file; old lines are still there | |
 | F4 | Log in, then disconnect | Disconnect line shows the message count, e.g. `(6 messages in history)` | |
 | F5 | Send more than 100 messages on one connection, then disconnect | Count shows **100** (history is capped) | |
@@ -170,18 +178,18 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 
 ## I. Failed logins and lockout (issue #54 · use case 7 · test case 7)
 
-_Register `zed` / `right` first. Tip: for I7, set `locked_until` to a past time in DB Browser instead of waiting 5 minutes._
+_Register `zed` / `Right#2026` first. Tip: for I7, set `locked_until` to a past time in DB Browser instead of waiting 5 minutes._
 
 | ID | Send / do | Expected | Result |
 |---|---|---|---|
 | I1 | Login zed / `wrong` | `INVALID_CREDENTIALS`, `"failed_attempts":1`, message says `1 of 3 attempts used` | |
 | I2 | Login zed / `wrong` again | `failed_attempts` 2 | |
 | I3 | Login zed / `wrong` a 3rd time | `ACCOUNT_LOCKED`, `failed_attempts` 3, `lockedUntil` ≈ now + 5 min; server log says `LOCKED for 5 minutes` | |
-| I4 | Login zed / **`right`** while locked | Still `ACCOUNT_LOCKED` (the correct password doesn't help) | |
+| I4 | Login zed / **`Right#2026`** while locked | Still `ACCOUNT_LOCKED` (the correct password doesn't help) | |
 | I5 | Login `nobody` / `x` | `INVALID_CREDENTIALS` with **no** `failed_attempts` field | |
 | I6 | Check the DB during the lock | zed: `failed_attempts` 3, `locked_until` set | |
 | I7 | Wait 5 minutes (or see the tip), login zed / `wrong` | `INVALID_CREDENTIALS`, `failed_attempts` **1** (count restarted) | |
-| I8 | Then login zed / `right` | Success; DB `failed_attempts` 0, `locked_until` NULL | |
+| I8 | Then login zed / `Right#2026` | Success; DB `failed_attempts` 0, `locked_until` NULL | |
 | I9 | 2 wrong, then right, then 1 wrong | Last reply shows `failed_attempts` 1 (success reset the count) | |
 | I10 | Lock zed, restart the server, try logging in | Still `ACCOUNT_LOCKED` (the lock is saved in the DB) | |
 
@@ -207,6 +215,16 @@ _Use the "Hearts Server Monitor" window. Open 2–3 `send.py` clients._
 | J14 | Close the monitor window | The server shuts down cleanly; logged-in users are marked logged out in the DB | |
 | J15 | Type `exit` in the terminal | The server and the window both close | |
 
+## K. Config file (`server.ini`)
+
+| ID | Steps | Expected | Result |
+|---|---|---|---|
+| K1 | Delete `server.ini` next to the exe, start the server | It's recreated with `port=5000`, `maxFailedLogins=3`, `lockoutMinutes=5`, `maxConcurrentGames=1`; the log shows `[Config] created ...` | |
+| K2 | Set `maxFailedLogins=2`, restart, enter 2 wrong passwords | Locked after **2** | |
+| K3 | Set `lockoutMinutes=1`, lock an account | `lockedUntil` ≈ now + 1 min | |
+| K4 | Set `port=6000`, restart with no arguments | Listens on 6000; `test_server 5000` still overrides it | |
+| K5 | Set `maxFailedLogins=abc` | Log shows `bad value ... using default 3` | |
+
 ---
 
 ## Failures
@@ -222,4 +240,5 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ## Change log
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).
+- **2026-11-23 (b):** Strong example passwords (the server now enforces the client's password rule); C14–C19 (username, password, unique email); E10–E11; section K (`server.ini`).
 - **2026-11-23:** Added section I (lockout, #54) and section J (Server Monitoring GUI, #65/#72/#73/#74); H6 (v2→v3 upgrade); A1 mentions the GUI.

@@ -88,6 +88,10 @@ public:
                      const PasswordHasher::Hashed& password,
                      const PasswordHasher::Hashed& pin);
 
+    // True if some account already uses this (lowercase) email.
+    // "One email = one account" (team notes 10/1).
+    bool emailInUse(const QString& email);
+
     // Replaces a player's password hash + salt. Used by password recovery.
     bool updatePassword(int playerId, const PasswordHasher::Hashed& password);
 
