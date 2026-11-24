@@ -41,7 +41,10 @@ GameManager::StartResult GameManager::startGame(int requestingPlayerId)
         return StartResult::NotFull;
 
     m_state = State::InGame;
-    // Issue #71 (Setup Table) will create the Table here: seats, scores = 0.
+    // Use case 16: seat the four players (lobby order) with scores 0.
+    m_table = std::make_unique<Table>(m_lobby.players());
+    // Use case 17: shuffle and deal round 1.
+    m_table->startNewRound();
     return StartResult::Ok;
 }
 
@@ -56,5 +59,10 @@ QJsonObject GameManager::summary() const
 
 QString GameManager::stateText() const
 {
-    return m_state == State::WaitingForPlayers ? "Waiting for players" : "In game";
+    if (m_state == State::WaitingForPlayers || !m_table)
+        return "Waiting for players";
+    const QString phase = m_table->phase() == Table::Phase::Passing
+                              ? "passing " + Table::directionName(m_table->passDirection())
+                              : "playing";
+    return QString("In game - round %1, %2").arg(m_table->roundNumber()).arg(phase);
 }

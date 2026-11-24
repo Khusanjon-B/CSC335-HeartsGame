@@ -236,6 +236,10 @@ Sent by the server on its own, for example when the operator types into the serv
 | `NOT_IN_LOBBY` | leave_lobby, start_game |
 | `NOT_HOST` | start_game |
 | `LOBBY_NOT_FULL` | start_game |
+| `NOT_IN_GAME` | pass_cards |
+| `NOT_PASSING_PHASE` | pass_cards |
+| `ALREADY_PASSED` | pass_cards |
+| `INVALID_CARDS` | pass_cards |
 | `RECOVERY_FAILED` | recover_password |
 | `SERVER_ERROR` | register, recover_password |
 | `INVALID_JSON` | error |
@@ -331,7 +335,7 @@ Once a game starts, its lobby closes. It disappears from `get_lobbies`, and `joi
 | `player_joined` | Everyone already in the lobby | `lobbyId`, `username` (who joined), `players` |
 | `player_left` | Everyone still in the lobby | `lobbyId`, `username` (who left), `players` |
 | `host_left` | Everyone still in the lobby, which **no longer exists** | `lobbyId`, `username` (the host), `message` |
-| `game_started` | Everyone in the lobby, host included | `lobbyId`, `players` (seat order) |
+| `game_started` | Everyone in the lobby, host included | `lobbyId`, `players` (seat order), `scores` (`[0,0,0,0]`) |
 
 ```json
 {"command": "player_joined", "requestId": -3, "lobbyId": 1, "username": "dave", "players": ["alice", "bob", "carol", "dave"]}
@@ -340,6 +344,73 @@ Once a game starts, its lobby closes. It disappears from `get_lobbies`, and `joi
 **Client note for `host_left`:** stop the game, show the "host left" popup, and go back to the home screen.
 The server has already taken you out of the lobby.
 
-> **Not built yet:** the table itself (seats, scores 0, cards) is issue #71 onward and will start right after
-> `game_started`. If a player disconnects **during** a game, the others get `player_left`. Test case 19.2
+> If a player disconnects **during** a game, the others get `player_left`. Test case 19.2
 > (wait for them to come back) belongs to the gameplay issues.
+
+---
+
+## Playing: table setup, dealing, and passing (use cases 16–17, issues #71 and #70)
+
+### Card codes
+Every card is a short string: **rank + suit letter**.
+
+| Ranks | `2` `3` `4` `5` `6` `7` `8` `9` `10` `J` `Q` `K` `A` |
+|---|---|
+| **Suits** | `C` Clubs · `D` Diamonds · `S` Spades · `H` Hearts |
+
+Examples: `"2C"` (2 of Clubs), `"10H"`, `"QS"` (Queen of Spades), `"AH"`. The server reads them case-insensitively.
+Hands are sent **sorted**: Clubs, Diamonds, Spades, Hearts, each low to high.
+
+### Seats
+Seats go around the table in `players` order: index 0 → 1 → 2 → 3 → back to 0.
+**Left** means the next seat, **right** the previous one, and **across** the opposite one.
+
+### Order of messages for one round
+```
+everyone   <- game_started   {players, scores:[0,0,0,0]}          (first round only, #71)
+each seat  <- round_started  {round, passDirection, passTo, hand}   private, 13 cards
+each seat  -> pass_cards     {cards: [3 codes]}
+others     <- player_passed  {username}
+     ... once all 4 have passed ...
+each seat  <- cards_received {from, cards, hand}                    private
+everyone   <- player_turn    {username, playerNum, trick: 1}        2 of Clubs holder leads
+```
+On a **hold** round, `round_started` has `"passDirection":"hold"` and `"passTo":""`, and `player_turn` comes straight after.
+
+**Pass direction by round:** 1 left, 2 right, 3 across, 4 hold, 5 left, and so on.
+
+### `round_started` (server → one player)
+```json
+{"command": "round_started", "requestId": -7, "lobbyId": 1, "round": 1, "passDirection": "left", "passTo": "bob",
+ "hand": ["7C", "JC", "3D", "6D", "QD", "2S", "5S", "8S", "10S", "2H", "3H", "4H", "JH"]}
+```
+
+### Pass cards (`pass_cards`)
+```json
+{"command": "pass_cards", "requestId": 12, "cards": ["QD", "10S", "JH"]}
+```
+```json
+{"command": "pass_cards_result", "requestId": 12, "success": true, "error": "", "message": "cards chosen, waiting for the other players"}
+```
+The cards stay in your hand until **all four** players have chosen; then everyone's cards move at the same time.
+
+| `error` | When |
+|---|---|
+| `NOT_IN_GAME` | You're not seated at a started game |
+| `NOT_PASSING_PHASE` | Passing is over, or it's a hold round |
+| `ALREADY_PASSED` | You already chose your 3 cards this round |
+| `INVALID_CARDS` | Not exactly 3, a bad code, a card not in your hand, or the same card twice |
+
+### `cards_received` (server → one player)
+```json
+{"command": "cards_received", "requestId": -9, "lobbyId": 1, "from": "dave", "cards": ["KC", "AD", "QH"],
+ "hand": ["7C", "JC", "KC", "3D", "6D", "AD", "2S", "5S", "8S", "2H", "3H", "4H", "QH"]}
+```
+`hand` is your full new hand. Replace the old one with it.
+
+### `player_turn` (server → everyone)
+```json
+{"command": "player_turn", "requestId": -10, "lobbyId": 1, "username": "dave", "playerNum": 4, "trick": 1}
+```
+If `username` is you, it's your turn. Right now this is only sent for the **first** trick (the 2 of Clubs
+holder leads). Playing cards and the turns after that are issue #66.
