@@ -32,6 +32,7 @@
 //   4. Document it in PROTOCOL.md.
 // ---------------------------------------------------------------------------
 
+#include "Config.h"
 #include "Connection.h"
 #include "Database.h"
 #include "Message.h"
@@ -40,6 +41,7 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QTcpServer>
+#include <optional>
 #include <vector>
 
 class Server : public QObject
@@ -48,16 +50,42 @@ class Server : public QObject
 
 public:
     // The Server uses (but doesn't own) the Database created in main().
-    explicit Server(Database& db, QObject* parent = nullptr);
+    // `config` holds the server.ini settings (lockout limits, max games...).
+    explicit Server(Database& db, const ServerConfig& config, QObject* parent = nullptr);
 
     // Starts listening on every IPv4 network card. Returns false on failure.
     bool start(quint16 port);
 
-    // Sends a server_message to every connected client (used by the console).
+    // Sends a server_message to every connected client (console + GUI).
     void broadcast(const QString& text);
 
     // Logs out every logged-in player in the database. Called on shutdown.
     void logoutEveryone();
+
+    // ---- Server Monitoring GUI (admin) queries ----
+    // Named after the "Server Side App" methods in the class diagram.
+    // They only READ state (except unlockAccount), and run on the main
+    // thread like everything else, so no locks are needed.
+
+    // One connected client, as the admin sees it.
+    struct ClientInfo
+    {
+        QString ip;         // "192.168.1.20:53211"
+        QString username;   // empty if not logged in
+        bool    loggedIn = false;
+    };
+
+    std::vector<ClientInfo> viewConnectedUsers() const;   // every open connection (#72)
+    std::vector<ClientInfo> viewLoggedInUsers() const;    // only logged-in ones (#65)
+    std::optional<int> viewRegisteredUsers();             // account count (#74); nullopt = DB error
+    std::optional<std::vector<LockedAccount>> viewLockedAccounts();   // (#73); nullopt = DB error
+    bool unlockAccount(const QString& username);          // admin unlock (use case 7.2)
+
+signals:
+    // Emitted whenever something the admin can see changes: a client
+    // connects/disconnects, logs in/out, registers, gets locked or unlocked.
+    // The monitor window connects to this to refresh itself.
+    void stateChanged();
 
 private:
     // Every handler has the same shape: who sent it, and what they sent.
@@ -100,7 +128,11 @@ private:
     void replyOk(Connection& conn, const Message& request, const QString& text,
                  QJsonObject extra = {});
     void replyFail(Connection& conn, const Message& request, const QString& errorCode,
-                   const QString& text);
+                   const QString& text, QJsonObject extra = {});
+
+    // login_result for a locked account: ACCOUNT_LOCKED + failed_attempts
+    // + lockedUntil, with the minutes left in the message.
+    void replyLocked(Connection& conn, const Message& request, const PlayerRecord& player);
 
     // Sends {"command":"error","requestId":id,"error":code,"message":text}.
     // Used when the message itself is broken, so there's no handler to reply.
@@ -109,6 +141,7 @@ private:
 
     // ---- data ----
     Database&               m_db;
+    ServerConfig            m_config;        // copy of the server.ini settings
     QTcpServer              m_tcpServer;
     std::vector<Connection> m_connections;   // one entry per connected client
     QHash<QString, Handler> m_handlers;      // "login" -> &Server::handleLogin

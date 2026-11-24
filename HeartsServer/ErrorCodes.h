@@ -31,12 +31,15 @@ inline const QString ServerError      = "SERVER_ERROR";        // database probl
 // ---- register ----
 inline const QString InvalidEmail     = "INVALID_EMAIL";       // doesn't look like x@y.z
 inline const QString InvalidPin       = "INVALID_PIN";         // not a 4-8 digit string
-// (a taken username is reported as InvalidCredentials, as in the protocol doc)
+inline const QString InvalidUsername  = "INVALID_USERNAME";    // not just letters, digits, _ and -
+inline const QString InvalidPassword  = "INVALID_PASSWORD";    // too short, or missing a letter/digit/special char (also recover_password)
+// (a taken username or email is reported as InvalidCredentials, as in the protocol doc)
 
 // ---- login ----
 inline const QString InvalidCredentials = "INVALID_CREDENTIALS"; // wrong username or password (deliberately the same code)
 inline const QString AlreadyLoggedIn    = "ALREADY_LOGGED_IN";   // this connection is already logged in
 inline const QString AccountInUse       = "ACCOUNT_IN_USE";      // account is logged in on another connection
+inline const QString AccountLocked      = "ACCOUNT_LOCKED";      // 3 failed logins; locked for 5 min or until an admin unlocks
 
 // ---- logout ----
 inline const QString NotLoggedIn      = "NOT_LOGGED_IN";       // nothing to log out of

@@ -1,6 +1,6 @@
 # Hearts Message Protocol
 
-_Matches the server as of 2026-11-19. This is the source text for the team's
+_Matches the server as of 2026-11-23. This is the source text for the team's
 "message formats" Google Doc. Paste these sections over the matching ones there._
 
 ---
@@ -14,7 +14,7 @@ _Matches the server as of 2026-11-19. This is the source text for the team's
 - Use straight quotes (`"`). Curly quotes (“ ”) aren't valid JSON.
 
 ```json
-{"command": "login", "requestId": 1, "username": "alice", "password": "pw"}
+{"command": "login", "requestId": 1, "username": "alice", "password": "Hearts#2026"}
 ```
 
 ### requestId
@@ -47,12 +47,14 @@ Some replies add extra fields on success (listed per command).
   "requestId": 1,
   "username": "alice",
   "email": "alice@example.com",
-  "password": "pw",
+  "password": "Hearts#2026",
   "pin": "0042"
 }
 ```
 - `pin`: a **string** of 4–8 digits, used for password recovery.
-- `email`: must look like `x@y.z`. The server stores it lowercase.
+- `username`: letters, digits, `_` and `-` only.
+- `password`: at least 9 characters, with at least one letter, one digit, and one special character (the same rule as the client).
+- `email`: must look like `x@y.z`. The server stores it lowercase. **One email = one account.**
 - Registering does **not** log you in. Send `login` next.
 
 **Server, success**
@@ -67,9 +69,11 @@ Some replies add extra fields on success (listed per command).
 | `error` | When |
 |---|---|
 | `MISSING_FIELDS` | Any of username / email / password / pin is missing or blank |
+| `INVALID_USERNAME` | Username has characters other than letters, digits, `_`, `-` |
+| `INVALID_PASSWORD` | Password breaks the rule above |
 | `INVALID_EMAIL` | Email doesn't look like `x@y.z` |
 | `INVALID_PIN` | Pin isn't a string of 4–8 digits |
-| `INVALID_CREDENTIALS` | Username is already taken |
+| `INVALID_CREDENTIALS` | Username already taken, **or** email already in use (`message` says which) |
 | `SERVER_ERROR` | Database problem |
 
 > **Multiple errors:** the server checks in the order above and returns the **first** problem only.
@@ -80,7 +84,7 @@ Some replies add extra fields on success (listed per command).
 
 **Client**
 ```json
-{"command": "login", "requestId": 2, "username": "alice", "password": "pw"}
+{"command": "login", "requestId": 2, "username": "alice", "password": "Hearts#2026"}
 ```
 
 **Server, success**
@@ -90,21 +94,27 @@ Some replies add extra fields on success (listed per command).
 
 **Server, failure**
 ```json
-{"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password"}
+{"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password (1 of 3 attempts used)", "failed_attempts": 1}
 ```
-| `error` | When |
-|---|---|
-| `MISSING_FIELDS` | Username or password missing or blank |
-| `INVALID_CREDENTIALS` | Unknown username **or** wrong password (deliberately the same code) |
-| `ALREADY_LOGGED_IN` | This connection is already logged in |
-| `ACCOUNT_IN_USE` | The account is logged in on another connection |
+| `error` | When | Extra fields |
+|---|---|---|
+| `MISSING_FIELDS` | Username or password missing or blank | |
+| `INVALID_CREDENTIALS` | Unknown username **or** wrong password (deliberately the same code) | `failed_attempts`, only when the username exists |
+| `ACCOUNT_LOCKED` | 3 wrong passwords in a row; locked for 5 minutes or until an admin unlocks it | `failed_attempts`, `lockedUntil` |
+| `ALREADY_LOGGED_IN` | This connection is already logged in | |
+| `ACCOUNT_IN_USE` | The account is logged in on another connection | |
 
-> **Planned (issue #54): `failed_attempts`.** A failed login will also include
-> `"failed_attempts": <number>`, the count of consecutive failed logins for that account.
-> The account locks after 3. **Not sent yet.** Clients should treat the field as optional.
-> ```json
-> {"command": "login_result", "requestId": 2, "success": false, "error": "INVALID_CREDENTIALS", "message": "wrong username or password", "failed_attempts": 1}
-> ```
+**Server, locked**
+```json
+{"command": "login_result", "requestId": 4, "success": false, "error": "ACCOUNT_LOCKED", "message": "account locked after 3 failed attempts, try again in 5 minute(s)", "failed_attempts": 3, "lockedUntil": "2026-11-23T18:19:31"}
+```
+
+### Failed attempts and lockout (use case 7, issue #54)
+- **`failed_attempts`** is the number of wrong passwords **in a row** for that account. It's sent on `INVALID_CREDENTIALS` (when the username exists) and on `ACCOUNT_LOCKED`. Treat it as optional: it's left out for unknown usernames.
+- **The 3rd wrong password** locks the account for **5 minutes**. While locked, even the **right** password gets `ACCOUNT_LOCKED`.
+- **`lockedUntil`** is the server's local time (ISO) when the lock ends. Clients can show "try again after …" or use the minutes in `message`.
+- **A successful login** resets the count to 0. So does the lock running out.
+- **An admin** can unlock the account early from the Server Monitoring GUI (use case 7.2).
 
 > We use one code for "no such user" and "wrong password" (no `USERNAME_NOT_FOUND`)
 > so the reply doesn't reveal which usernames exist.
@@ -151,11 +161,12 @@ login screen and log in again without reconnecting.
   "username": "alice",
   "email": "alice@example.com",
   "pin": "0042",
-  "newPassword": "newpw"
+  "newPassword": "N3wHearts#26"
 }
 ```
 All four fields are required, and username, email, and pin must all match the account.
-Email is compared case-insensitively.
+Email is compared case-insensitively. `newPassword` must follow the same rule as in `register`.
+The account must **not** be logged in anywhere. After a reset, the player logs in again with the new password.
 
 **Server, success**
 ```json
@@ -170,6 +181,8 @@ Email is compared case-insensitively.
 |---|---|
 | `MISSING_FIELDS` | Any of the four fields missing or blank |
 | `RECOVERY_FAILED` | Username, email, or pin doesn't match (one shared code) |
+| `ACCOUNT_IN_USE` | The account is logged in right now |
+| `INVALID_PASSWORD` | `newPassword` breaks the password rule |
 | `SERVER_ERROR` | Database problem |
 
 ---
@@ -206,11 +219,14 @@ Sent by the server on its own, for example when the operator types into the serv
 |---|---|
 | `""` (empty) | Every successful `*_result` |
 | `MISSING_FIELDS` | register, login, recover_password |
+| `INVALID_USERNAME` | register |
+| `INVALID_PASSWORD` | register, recover_password |
 | `INVALID_EMAIL` | register |
 | `INVALID_PIN` | register |
-| `INVALID_CREDENTIALS` | register (username taken), login |
+| `INVALID_CREDENTIALS` | register (username or email taken), login |
 | `ALREADY_LOGGED_IN` | login |
-| `ACCOUNT_IN_USE` | login |
+| `ACCOUNT_IN_USE` | login, recover_password |
+| `ACCOUNT_LOCKED` | login |
 | `NOT_LOGGED_IN` | logout |
 | `RECOVERY_FAILED` | recover_password |
 | `SERVER_ERROR` | register, recover_password |

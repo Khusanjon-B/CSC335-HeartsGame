@@ -7,11 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Core    = event loop, strings, JSON, hashing
 # Network = TCP sockets
 # Sql     = database access (includes the built-in SQLite driver)
-find_package(Qt6 REQUIRED COMPONENTS Core Network Sql)
+# Widgets = the Server Monitoring GUI window
+find_package(Qt6 REQUIRED COMPONENTS Core Network Sql Widgets)
 qt_standard_project_setup()
 
 qt_add_executable(test_server
     main.cpp
+    Config.h         Config.cpp
     ErrorCodes.h
     Log.h            Log.cpp
     Message.h
@@ -19,5 +21,6 @@ qt_add_executable(test_server
     PasswordHasher.h PasswordHasher.cpp
     Database.h       Database.cpp
     Server.h         Server.cpp
+    MonitorWindow.h  MonitorWindow.cpp
 )
-target_link_libraries(test_server PRIVATE Qt6::Core Qt6::Network Qt6::Sql)
+target_link_libraries(test_server PRIVATE Qt6::Core Qt6::Network Qt6::Sql Qt6::Widgets)
