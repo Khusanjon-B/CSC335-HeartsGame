@@ -31,9 +31,17 @@ public class LogInController extends Controller{
                         ? response.get("message").getAsString()
                         : "Login successful.");
                 } else {
-                    errorMessage.setText(response.has("message")
+                    String message = response.has("message")
                         ? response.get("message").getAsString()
-                        : "Login failed.");
+                        : "Login failed.";
+                    if (response.has("failed_attempts")) {
+                        int failedAttempts = response.get("failed_attempts").getAsInt();
+                        message += " Attempt " + failedAttempts + " of 3.";
+                        if (failedAttempts >= 3) {
+                            message += " Account locked.";
+                        }
+                    }
+                    errorMessage.setText(message);
                 }
             })
         );
