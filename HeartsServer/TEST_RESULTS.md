@@ -26,7 +26,7 @@ protocols (results) while testing for final package").
 |---|---|---|---|---|
 | 2026-11-25 | `3d03b6d` | Change password, ping (#86, #89) | N1–N10 | ✅ 10 / 10 |
 | 2026-11-25 | `e46fdfc` | Trick play (#66) + passing regression (#70, #71) | O1–O14, M1–M15 | ✅ all pass (3 full rounds) |
-| 2026-11-25 | `server-scoring-game-end` | Scoring, game end, match history (#69, #68, #87) | P1–P13, H7, K6–K7 | ✅ all pass |
+| 2026-11-25 | `051535f` | Scoring, game end, match history (#69, #68, #87) | P1–P13, H7, K6–K7 | ✅ all pass |
 
 **Not yet run:** the GUI checks (J, M5, M17, O15, P7) were not re-run by hand for these changes. N11 isn't scripted. These need a manual pass.
 
@@ -81,7 +81,7 @@ protocols (results) while testing for final package").
 
 ## Run 2026-11-25 (c): scoring, game end, match history
 
-- **Commit:** branch `server-scoring-game-end`
+- **Commit:** `051535f` (branch `server-scoring-game-end`)
 - **Run by:** Claude, scripted (4 clients) + unit (C++)
 
 **Game 1:** `gameOverScore=30`.
