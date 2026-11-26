@@ -36,21 +36,28 @@ ServerConfig ServerConfig::load(const QString& filePath)
     cfg.maxFailedLogins    = readPositiveInt(settings, "lockout/maxFailedLogins", defaults.maxFailedLogins);
     cfg.lockoutMinutes     = readPositiveInt(settings, "lockout/lockoutMinutes", defaults.lockoutMinutes);
     cfg.maxConcurrentGames = readPositiveInt(settings, "games/maxConcurrentGames", defaults.maxConcurrentGames);
+    cfg.gameOverScore      = readPositiveInt(settings, "games/gameOverScore", defaults.gameOverScore);
 
-    // First run: write the file so there's something to edit.
-    if (!existed) {
-        settings.setValue("server/port", cfg.port);
-        settings.setValue("lockout/maxFailedLogins", cfg.maxFailedLogins);
-        settings.setValue("lockout/lockoutMinutes", cfg.lockoutMinutes);
-        settings.setValue("games/maxConcurrentGames", cfg.maxConcurrentGames);
-        settings.sync();
-        logMessage("[Config] created " + filePath + " with default settings");
-    } else {
-        logMessage("[Config] loaded " + filePath);
-    }
+    // Write any setting that's missing from the file (all of them on the
+    // first run), so every setting is there to edit, including ones added
+    // in a newer version of the server.
+    const std::pair<QString, int> all[] = {
+        {"server/port",               cfg.port},
+        {"lockout/maxFailedLogins",   cfg.maxFailedLogins},
+        {"lockout/lockoutMinutes",    cfg.lockoutMinutes},
+        {"games/maxConcurrentGames",  cfg.maxConcurrentGames},
+        {"games/gameOverScore",       cfg.gameOverScore},
+    };
+    for (const auto& [key, value] : all)
+        if (!settings.contains(key))
+            settings.setValue(key, value);
+    settings.sync();
+    logMessage(existed ? "[Config] loaded " + filePath
+                       : "[Config] created " + filePath + " with default settings");
 
-    logMessage(QString("[Config] port=%1 maxFailedLogins=%2 lockoutMinutes=%3 maxConcurrentGames=%4")
+    logMessage(QString("[Config] port=%1 maxFailedLogins=%2 lockoutMinutes=%3 maxConcurrentGames=%4 "
+                       "gameOverScore=%5")
                    .arg(cfg.port).arg(cfg.maxFailedLogins).arg(cfg.lockoutMinutes)
-                   .arg(cfg.maxConcurrentGames));
+                   .arg(cfg.maxConcurrentGames).arg(cfg.gameOverScore));
     return cfg;
 }

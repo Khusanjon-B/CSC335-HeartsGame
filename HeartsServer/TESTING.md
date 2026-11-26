@@ -4,7 +4,7 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-23 (covers: dealing/passing, lobbies/game sessions, connections, protocol, error codes, register, login/logout,
+_Last updated: 2026-11-25 (covers: scoring/game end/match history, trick play, change password/ping, dealing/passing, lobbies/game sessions, connections, protocol, error codes, register, login/logout,
 lockout, password recovery, hashing, history, logging, console, monitoring GUI, DB schema)_
 
 ---
@@ -48,6 +48,10 @@ Open `hearts.db` with [DB Browser for SQLite](https://sqlitebrowser.org/), or ru
 ### Recording results
 Fill in the **Result** column with ✅ / ❌ and the date, e.g. `✅ 11-16`. If a test fails,
 add a note under [Failures](#failures).
+
+**Then log the run in [TEST_RESULTS.md](TEST_RESULTS.md)** (team notes 11/3 and 11/24): the date, the commit you tested,
+who ran it, and the **actual output** for each test. This file is the *protocol* (what to do and what should happen);
+TEST_RESULTS.md is the *record* of what actually happened.
 
 ---
 
@@ -172,9 +176,10 @@ _Needs `alice` registered with email `alice@example.com` and pin `0042`._
 | H1 | Register a user, stop the server, start it again, log in | Login works (data persisted) | |
 | H2 | Kill the server while logged in (Stop button in Qt Creator), restart | Startup resets `connected` to 0 for everyone | |
 | H3 | **With an old (pre-11-16) DB:** start the server | Logs `old players table (schema v0) renamed to players_old`; both tables exist | |
-| H4 | After H3, check `PRAGMA user_version` | `3` | |
+| H4 | After H3, check `PRAGMA user_version` | `4` | |
 | H5 | Restart after H3 | No rename message the second time | |
 | H6 | **With a v2 DB (made 11-16 to 11-22):** start the server | Logs `upgraded from schema v2 to v3`; **all existing accounts still log in**; `failed_attempts` and `locked_until` columns exist | |
+| H7 | **With a v3 DB (made 11-23 to 11-24):** start the server | Logs `upgraded from schema v3 to v4 (match tables added)`; all accounts kept; `matches` and `match_players` exist; `PRAGMA user_version` is `4` | |
 
 ## I. Failed logins and lockout (issue #54 · use case 7 · test case 7)
 
@@ -224,6 +229,8 @@ _Use the "Hearts Server Monitor" window. Open 2–3 `send.py` clients._
 | K3 | Set `lockoutMinutes=1`, lock an account | `lockedUntil` ≈ now + 1 min | |
 | K4 | Set `port=6000`, restart with no arguments | Listens on 6000; `test_server 5000` still overrides it | |
 | K5 | Set `maxFailedLogins=abc` | Log shows `bad value ... using default 3` | |
+| K6 | Use a `server.ini` with no `gameOverScore` line, start the server | The line `gameOverScore=100` is added to the file; the other values are left alone | |
+| K7 | Set `gameOverScore=30`, restart, play | The game ends after the first round where someone reaches 30 | |
 
 ## L. Lobbies and game sessions (#64, #63 · use cases 8–11 · test cases 9–12)
 
@@ -318,6 +325,27 @@ _Continue from section M (passing done, `player_turn` received). "Leader" = the 
 | O14 | Play all 13 tricks | The points in all the `trick_won` messages add up to 26; every hand is empty | |
 | O15 | Monitor during play | `In game - round 1, trick N` | |
 
+## P. Scoring, game end, and match history (#69, #68, #87 · use cases 19, 20, 6 · test cases 20, 21, 6, 6.1)
+
+_Tip: set `gameOverScore=30` in `server.ini` and restart, so a game ends after 1–3 rounds instead of ~10.
+Keep a tally of each player's `trick_won` points per round._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| P1 | Play all 13 tricks of a round | Everyone gets `round_ended`: `roundPoints` = each player's tally, `scores` = running totals, `shotTheMoon` `""` (TC 20) | |
+| P2 | One player takes all 13 hearts and the Queen of Spades | `round_ended`: that player 0, the others 26 each; `shotTheMoon` = their name (TC 20) | |
+| P3 | After a round where nobody reached the limit | A new `round_started` arrives right away: round 2 `right`, round 3 `across`, round 4 `hold` (no passing, `player_turn` comes straight away), round 5 `left` | |
+| P4 | A round ends with someone at or above `gameOverScore` | Everyone gets `game_ended` with `players`, `scores`, `places`, `winners` (lowest score), `saved:true`, a `matchId` (TC 21) | |
+| P5 | Two players tie for the lowest score at the end | Both are in `winners`, and both have place 1 | |
+| P6 | After P4, anyone: `play_card` | `NOT_YOUR_TURN` | |
+| P7 | Monitor after P4 | `Game over after N round(s)` | |
+| P8 | DB after P4 | One `matches` row; 4 `match_players` rows with each seat, score, place | |
+| P9 | A player from the game: `{"command":"get_match_history","requestId":50}` | `matches` has the game with their `score`, `place`, `won`, and all 4 `players`; `stats`: `gamesPlayed` 1, `wins` 1 or 0, `losses` the opposite, `winPercentage` 100 or 0 (TC 6) | |
+| P10 | A new account: `get_match_history` | `matches:[]`, all stats 0, "No matches played yet." (TC 6.1) | |
+| P11 | Not logged in: `get_match_history` | `NOT_LOGGED_IN` | |
+| P12 | Right after `start_game`, in DB Browser rename table `matches` to `matches_x` and click **Write Changes**; play to the end | `game_ended` still arrives, with `saved:false`, `matchId` -1, "An error occurred while trying to reach the database."; log says `COULD NOT SAVE the match` (UC 20 exception). Rename it back afterwards: `get_match_history` shows nothing half-saved | |
+| P13 | Restart the server, then `get_match_history` | The saved matches are still there | |
+
 ---
 
 ## Failures
@@ -331,6 +359,7 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ---
 
 ## Change log
+- **2026-11-25 (c):** Section P (scoring, game end, match history); H7 (v3→v4); H4 now expects 4; K6–K7 (`gameOverScore`); results now go in TEST_RESULTS.md.
 - **2026-11-25 (b):** Section O (playing tricks, #66); M14 and M17 updated for `legalCards` and the trick number.
 - **2026-11-25 (a):** Section N (change password and ping, #86 and #89).
 - **2026-11-16:** First version. Sections A–H.

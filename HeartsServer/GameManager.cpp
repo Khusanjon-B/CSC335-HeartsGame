@@ -4,8 +4,9 @@
 
 #include "GameManager.h"
 
-GameManager::GameManager(int lobbyId, const LobbyPlayer& host)
+GameManager::GameManager(int lobbyId, const LobbyPlayer& host, int gameOverScore)
     : m_lobbyId(lobbyId)
+    , m_gameOverScore(gameOverScore)
     , m_lobby(host)   // the host takes seat 1
 {
 }
@@ -42,7 +43,7 @@ GameManager::StartResult GameManager::startGame(int requestingPlayerId)
 
     m_state = State::InGame;
     // Use case 16: seat the four players (lobby order) with scores 0.
-    m_table = std::make_unique<Table>(m_lobby.players());
+    m_table = std::make_unique<Table>(m_lobby.players(), m_gameOverScore);
     // Use case 17: shuffle and deal round 1.
     m_table->startNewRound();
     return StartResult::Ok;
@@ -61,6 +62,8 @@ QString GameManager::stateText() const
 {
     if (m_state == State::WaitingForPlayers || !m_table)
         return "Waiting for players";
+    if (m_state == State::Finished)
+        return QString("Game over after %1 round(s)").arg(m_table->roundNumber());
     const QString phase = m_table->phase() == Table::Phase::Passing
                               ? "passing " + Table::directionName(m_table->passDirection())
                               : QString("trick %1").arg(m_table->gameState().trickNumber());

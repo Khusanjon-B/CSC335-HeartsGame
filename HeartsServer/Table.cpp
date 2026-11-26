@@ -7,7 +7,8 @@
 
 #include <algorithm>
 
-Table::Table(const std::vector<LobbyPlayer>& players)
+Table::Table(const std::vector<LobbyPlayer>& players, int gameOverScore)
+    : m_gameOverScore(gameOverScore)
 {
     // Seat i = lobby position i (seat 0 is the host). The lobby is full
     // (4 players) before a game can start, so all 4 seats get filled.
@@ -144,6 +145,44 @@ GameState::PlayResult Table::playCard(int seatIndex, const Card& card)
 GameState::TrickResult Table::determineTrickWinner()
 {
     return m_gameState.finishTrick();
+}
+
+Table::RoundScore Table::updateScore()
+{
+    RoundScore result;
+    for (int i = 0; i < kSeats; ++i) {
+        result.points[i] = m_gameState.pointsTaken(i);
+        if (result.points[i] == kMoonPoints)
+            result.moonShooter = i;
+    }
+
+    // Shoot the Moon: the shooter gets 0 and the other three get 26 each.
+    if (result.moonShooter >= 0)
+        for (int i = 0; i < kSeats; ++i)
+            result.points[i] = (i == result.moonShooter) ? 0 : kMoonPoints;
+
+    for (int i = 0; i < kSeats; ++i)
+        m_scores[i] += result.points[i];
+    return result;
+}
+
+bool Table::gameOver() const
+{
+    return std::any_of(m_scores.begin(), m_scores.end(),
+                       [this](int score) { return score >= m_gameOverScore; });
+}
+
+std::array<int, Table::kSeats> Table::places() const
+{
+    // Your place = 1 + how many players have a strictly LOWER score.
+    std::array<int, kSeats> result{};
+    for (int i = 0; i < kSeats; ++i) {
+        result[i] = 1;
+        for (int j = 0; j < kSeats; ++j)
+            if (m_scores[j] < m_scores[i])
+                ++result[i];
+    }
+    return result;
 }
 
 QString Table::directionName(PassDirection direction)

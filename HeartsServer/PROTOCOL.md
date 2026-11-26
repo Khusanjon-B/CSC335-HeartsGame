@@ -294,7 +294,7 @@ Sent by the server on its own, for example when the operator types into the serv
 | `HEARTS_NOT_BROKEN` | play_card |
 | `RECOVERY_FAILED` | recover_password |
 | `SAME_PASSWORD` | change_password |
-| `SERVER_ERROR` | register, recover_password, change_password |
+| `SERVER_ERROR` | register, recover_password, change_password, get_match_history |
 | `INVALID_JSON` | error |
 | `MISSING_REQUEST_ID` | error |
 | `UNKNOWN_COMMAND` | error |
@@ -497,6 +497,7 @@ everyone   <- trick_won    {username, playerNum, trick, cards, points}
 everyone   <- player_turn  ...the winner leads the next trick
 ```
 After trick 13, the round is scored (see [Scoring](#scoring-and-the-end-of-a-round-use-case-19-issue-69)).
+When a game ends, sending `play_card` gets `NOT_YOUR_TURN`.
 
 ### Play a card (`play_card`)
 ```json
@@ -534,3 +535,58 @@ On any error nothing changes; it's still your turn, so pick another card (use ca
  "cards": ["2C", "9C", "KC", "4C"], "points": 0}
 ```
 Clear the table. `points` is what this trick was worth. The next `player_turn` names the winner.
+
+---
+
+## Scoring and the end of a round (use case 19, issue #69)
+
+After trick 13, everyone gets `round_ended`:
+```json
+{"command": "round_ended", "requestId": -60, "lobbyId": 1, "round": 1,
+ "roundPoints": [3, 0, 4, 19], "scores": [3, 0, 4, 19], "shotTheMoon": ""}
+```
+- `roundPoints`: what each seat scored **this round**. `scores`: running totals. Both are in seat (`players`) order.
+- **Shoot the Moon:** if one player took all 26 points, they score 0 and everyone else scores 26 that round.
+  `shotTheMoon` is their username (otherwise `""`).
+- **Next:**
+  - **Nobody has reached 100:** the next round is dealt straight away, and a new `round_started` arrives.
+    The pass direction keeps rotating (left, right, across, hold).
+  - **Someone has reached 100:** the game ends with `game_ended`.
+
+## Game end (use case 20, issue #68)
+
+```json
+{"command": "game_ended", "requestId": -95, "lobbyId": 1,
+ "players": ["alice", "bob", "carol", "dave"], "scores": [85, 64, 100, 63], "places": [3, 2, 4, 1],
+ "winners": ["dave"], "rounds": 12, "matchId": 7, "saved": true, "message": "Game over!"}
+```
+- **Winner:** the **lowest** score wins. `places` is per seat (1 = winner).
+  Tied scores share a place, so there can be more than one winner, e.g. `[3, 1, 1, 4]` with `winners: ["bob","carol"]`.
+- **What to show:** the final results screen, with **Play Again** and **Leave** options.
+- **Saving:** the match is saved to every player's history.
+  - **If the database can't be reached:** `saved` is `false`, `matchId` is `-1`, and `message` is "An error occurred while trying to reach the database."
+  - **Results:** they're still shown either way.
+- **Ending the game early:** `gameOverScore` in `server.ini` (default 100) changes the limit, which makes it quick to test.
+
+## Match history (`get_match_history`), use case 6, issue #87
+
+```json
+{"command": "get_match_history", "requestId": 40}
+```
+```json
+{"command": "get_match_history_result", "requestId": 40, "success": true, "error": "", "message": "2 match(es) played",
+ "matches": [
+   {"matchId": 7, "playedAt": "2026-11-25T18:24:55", "rounds": 12, "score": 63, "place": 1, "won": true,
+    "players": [{"username": "alice", "score": 85, "place": 3}, {"username": "bob", "score": 64, "place": 2},
+                {"username": "carol", "score": 100, "place": 4}, {"username": "dave", "score": 63, "place": 1}]}
+ ],
+ "stats": {"gamesPlayed": 2, "wins": 1, "losses": 1, "winPercentage": 50}}
+```
+- **Order:** newest match first. `score`, `place` and `won` are yours. `players` is in seat order.
+- **Stats:** a **win** is place 1, ties included. `losses` = `gamesPlayed` − `wins`. `winPercentage` is rounded to a whole number.
+- **No matches:** `matches` is `[]`, every stat is 0, and `message` is "No matches played yet." (test case 6.1).
+
+| `error` | When |
+|---|---|
+| `NOT_LOGGED_IN` | Not logged in |
+| `SERVER_ERROR` | Database problem ("Account systems could not be reached.") |

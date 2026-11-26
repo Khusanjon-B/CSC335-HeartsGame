@@ -18,6 +18,7 @@
 //
 //   [games]
 //   maxConcurrentGames=1
+//   gameOverScore=100
 //
 // A port given on the command line (test_server 6000) overrides the file.
 // To add a setting: add a field here with its default, then one line each
@@ -32,6 +33,8 @@ struct ServerConfig
     int     maxFailedLogins    = 3;     // wrong passwords in a row before lockout (UC 7)
     int     lockoutMinutes     = 5;     // how long a lockout lasts (UC 7)
     int     maxConcurrentGames = 1;     // lobbies/games allowed at once (UC 11)
+    int     gameOverScore      = 100;   // game ends when someone reaches this (UC 19);
+                                        // lower it (e.g. 10) to test game end quickly
 
     // Reads the file (creating it with defaults if it's missing).
     // Bad or missing values fall back to the defaults above.

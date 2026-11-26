@@ -8,9 +8,10 @@ a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** w
 the admin see who's connected, who's logged in, the registered count, and locked
 accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
 4-player game; the server then seats everyone, shuffles, deals, runs the 3-card pass, and checks every card played
-against the Hearts rules and decides who wins each trick.
+against the Hearts rules and decides who wins each trick. Rounds are scored (with Shoot the Moon) until someone
+reaches 100; then the match is saved and players can look up their match history and win/loss stats.
 
-**Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
+**Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md) · **Test results:** [TEST_RESULTS.md](TEST_RESULTS.md)
 
 ---
 
@@ -46,7 +47,10 @@ against the Hearts rules and decides who wins each trick.
 | Shuffle, deal 13 each, 3-card pass (left / right / across / hold) (#70) | ✅ Working (tested) |
 | 2 of Clubs holder prompted to lead trick 1 (#70) | ✅ Working (tested) |
 | Card play with the Hearts rules, trick winner (#66) | ✅ Working (tested) |
-| Scoring, game end, play again (#69, #68, #67) | ❌ Not started |
+| Round scoring + Shoot the Moon, next round or game end at 100 (#69) | ✅ Working (tested) |
+| Game end: final results, match saved to the DB (#68) | ✅ Working (tested) |
+| Match history + win/loss stats (`get_match_history`, #87, UC 6) | ✅ Working (tested) |
+| Play again (#67) | ❌ Not started |
 
 ---
 
@@ -82,11 +86,13 @@ Starting the server opens **two windows**:
 | `GameState.h/.cpp` | The cards in play in one round: hands, the current trick, whose turn, tricks taken, and the Hearts rules |
 | `Card.h` | One card, the `"QS"` / `"10H"` card codes, and card points |
 | `Deck.h` | 52-card deck: `newDeck()`, `shuffle()`, `dealCards()` |
-| `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
+| `Database.h/.cpp` | All SQL (players, matches). Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
 | `Message.h` | `struct Message`, the requestId rules, and `redactSecrets()` |
 | `ErrorCodes.h` | Every error code the server can send |
 | `PROTOCOL.md` | The message protocol spec, written to match the team Google Doc |
+| `TESTING.md` | Manual test protocol: steps and expected results, by feature |
+| `TEST_RESULTS.md` | Dated test runs: what was tested, the actual output, pass/fail (team notes 11/3, 11/24) |
 | `Connection.h` | `struct Connection`: one connected client, including its message history |
 | `Log.h/.cpp` | `logMessage()` writes to the terminal and the log file |
 | `Config.h/.cpp` | Reads `server.ini` (port, lockout limits, max games) |
@@ -183,6 +189,9 @@ The short version:
 | `play_card` | `card` | `NOT_LOGGED_IN`, `NOT_IN_GAME`, `INVALID_CARDS`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `MUST_LEAD_TWO_OF_CLUBS`, `MUST_FOLLOW_SUIT`, `NO_POINTS_FIRST_TRICK`, `HEARTS_NOT_BROKEN` |
 | _(server)_ `card_played` | `lobbyId`, `username`, `playerNum`, `card`, `trick`, `cardsOnTable`, `heartsBroken` | — |
 | _(server)_ `trick_won` | `lobbyId`, `username`, `playerNum`, `trick`, `cards`, `points` | — |
+| _(server)_ `round_ended` | `lobbyId`, `round`, `roundPoints`, `scores`, `shotTheMoon` | — |
+| _(server)_ `game_ended` | `lobbyId`, `players`, `scores`, `places`, `winners`, `rounds`, `matchId`, `saved`, `message` | — |
+| `get_match_history` | _(none)_ | `NOT_LOGGED_IN`, `SERVER_ERROR` |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -226,8 +235,11 @@ lockoutMinutes=5
 
 [games]
 maxConcurrentGames=1
+gameOverScore=100
 ```
-- **First run:** the file is created next to the exe with these defaults.
+- **`gameOverScore`:** the game ends when someone reaches it. The notes say "User decides the ending score (default 100 points or more)".
+  Lower it (e.g. `30`) to test game end quickly.
+- **First run:** the file is created next to the exe with these defaults. Settings missing from an older file are added to it.
 - **Applying changes:** edit the file and restart the server.
 - **Bad values** fall back to the default, with a warning in the log.
 - **The port** can still be overridden on the command line: `test_server 6000`.
@@ -328,6 +340,24 @@ The cards in play live in a **`GameState`** (class diagram: `playerHands[][]`, `
 
 ---
 
+## Scoring, game end, and match history (#69, #68, #87 · use cases 19, 20, 6)
+
+- **Round scoring:** after trick 13, `Table::updateScore()` adds each player's points (hearts 1, Queen of Spades 13).
+  - **Shoot the Moon:** a player who took all 26 points scores 0, and the others get 26.
+  - Everyone gets `round_ended`.
+- **Next round or end:**
+  - **Nobody at `gameOverScore` (100):** the next round is dealt, and the pass direction keeps rotating.
+  - **Somebody is:** `Server::endGame()` runs.
+- **Game end:** the `GameManager` state becomes **Finished**. `Table::places()` ranks players by score (lowest = 1st; ties share a place). Then:
+  - `Database::saveMatch()` writes the match in one transaction.
+  - Everyone gets `game_ended` with the scores, places and winners.
+  - If the DB write fails, `game_ended` still goes out, with `saved:false` and the use case 20 database error message.
+- **Match history:** `get_match_history` returns the player's matches, newest first, plus stats (games, wins, losses, win %). Stats are counted from the match rows, not stored separately, so they can't drift.
+
+The monitor shows `Game over after N round(s)` for a finished game.
+
+---
+
 ## Passwords and pins
 
 `PasswordHasher` stores `hash = SHA-256(salt + secret)` with a new random 16-byte salt for
@@ -359,11 +389,25 @@ SQLite through Qt's built-in `QSQLITE` driver, so no separate SQLite install is 
 | `failed_attempts` | INTEGER | Wrong passwords in a row. Reset on success or unlock _(v3)_ |
 | `locked_until` | TEXT | ISO time the lock ends; NULL or past means not locked _(v3)_ |
 
+### Tables `matches` and `match_players` (schema version 4)
+"Match DB" in the class diagram. One `matches` row per finished game, and one `match_players` row per player in it.
+
+| Table | Column | Notes |
+|---|---|---|
+| `matches` | `match_id` | INTEGER PK AUTOINCREMENT |
+| | `played_at` | ISO timestamp of the game end |
+| | `rounds` | How many rounds were played |
+| `match_players` | `match_id`, `player_id` | Primary key together |
+| | `seat` | 0–3 |
+| | `score` | Final score |
+| | `place` | 1 = won (ties share a place) |
+
 ### Schema versions
 The database file remembers its layout version in SQLite's `PRAGMA user_version`.
 At startup, `Database::prepareSchema()` upgrades older files:
 - **v0/v1** (plain-text passwords): the old table is **renamed to `players_old`** (kept, not deleted). Those accounts must register again.
 - **v2 → v3:** the `failed_attempts` and `locked_until` columns are added. **All accounts are kept.**
+- **v3 → v4:** the `matches` and `match_players` tables are added. Nothing else changes. **All accounts are kept.**
 
 **To change the table:** edit the `CREATE TABLE`, bump `kSchemaVersion`, and add an upgrade step for the previous version (usually `ALTER TABLE ... ADD COLUMN`).
 
@@ -390,12 +434,20 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
-- [ ] Scoring, game end, play again (#69, #68, #67)
+- [ ] Play again (#67)
 - [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
 
 ---
 
 ## Change log
+
+### 2026-11-25 (c) — Scoring, game end, match history (#69, #68, #87)
+- **Rounds are scored** with Shoot the Moon (`Table::updateScore()`), and everyone gets `round_ended`. Then the next round is dealt, or the game ends at `gameOverScore`.
+- **Game end:** the new `GameManager` state is **Finished**. Everyone gets `game_ended` with scores, places and winners (lowest score wins, ties share).
+- **DB schema v4:** new `matches` and `match_players` tables. `Database::saveMatch()` and `getMatchHistory()`. v3 files are upgraded in place.
+- **New command `get_match_history`** with stats: games played, wins, losses, win %.
+- **New `server.ini` setting `gameOverScore`** (default 100). Missing settings are now added to an existing `server.ini`.
+- **New `TEST_RESULTS.md`:** dated test runs with actual outputs (team notes 11/3 and 11/24).
 
 ### 2026-11-25 (b) — Playing tricks (#66)
 - **New class `GameState`** (class diagram). It holds the hands, the current trick, whose turn it is, tricks taken, and the Hearts rules. The `Table` owns one.

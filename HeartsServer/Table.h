@@ -56,7 +56,8 @@ public:
     };
 
     // Use case 16: seat the players in lobby order and set all scores to 0.
-    explicit Table(const std::vector<LobbyPlayer>& players);
+    // `gameOverScore` is the 100-point limit (gameOverScore in server.ini).
+    Table(const std::vector<LobbyPlayer>& players, int gameOverScore);
 
     // ---- seats and scores (#71) ----
     const Seat& seat(int seatIndex) const { return m_seats[seatIndex]; }
@@ -109,6 +110,32 @@ public:
     // All 13 tricks of this round are done.
     bool roundOver() const { return m_phase == Phase::Playing && m_gameState.roundOver(); }
 
+    // ---- scoring (#69, use case 19) ----
+
+    static constexpr int kMoonPoints = 26;   // all 13 hearts + the Queen of Spades
+
+    // What updateScore() did this round.
+    struct RoundScore
+    {
+        std::array<int, kSeats> points{};   // added to each seat's score this round
+        int moonShooter = -1;               // seat that shot the moon, or -1
+    };
+
+    // Call when roundOver(). Adds each seat's points for the round to its
+    // score ("updateScore()" in the class diagram):
+    //   - every heart taken = 1, the Queen of Spades = 13
+    //   - SHOOT THE MOON: a player who took all 26 points scores 0 and
+    //     everyone else gets 26 instead.
+    RoundScore updateScore();
+
+    // Someone has reached the game-over score (use case 19 step 3).
+    bool gameOver() const;
+    int  gameOverScore() const { return m_gameOverScore; }
+
+    // Final places, by seat: lowest score = place 1. Tied scores share a
+    // place (e.g. 1, 1, 3, 4), so a tie for lowest means two winners.
+    std::array<int, kSeats> places() const;
+
     // "left" / "right" / "across" / "hold", as sent to clients.
     static QString directionName(PassDirection direction);
 
@@ -118,6 +145,7 @@ private:
     GameState                             m_gameState;  // hands + tricks for this round
     std::array<std::vector<Card>, kSeats> m_chosenPass; // cards picked this round, not moved yet
     std::array<std::vector<Card>, kSeats> m_received;   // cards each seat got in the pass
+    int           m_gameOverScore = 100;
     int           m_round = 0;
     PassDirection m_direction = PassDirection::Left;
     Phase         m_phase = Phase::Passing;
