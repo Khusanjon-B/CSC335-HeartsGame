@@ -137,16 +137,24 @@ private:
     void handleLeaveLobby(Connection& conn, const Message& request);   // leave (host leaving disbands)
     void handleStartGame(Connection& conn, const Message& request);    // host starts a full lobby
 
-    // ---- in-game (issues #71, #70; use cases 16, 17) ----
+    // ---- in-game (issues #71, #70, #66; use cases 16, 17, 18) ----
     void handlePassCards(Connection& conn, const Message& request);    // pick 3 cards to pass
+    void handlePlayCard(Connection& conn, const Message& request);     // play one card to the trick
 
     // Tells each player privately about the new round: their hand and the
     // pass direction (round_started). If it's a hold round, play starts at once.
     void announceRound(GameManager& game);
 
-    // Tells everyone whose turn it is (player_turn). For now this is only
-    // the 2-of-Clubs holder leading trick 1; trick play is issue #66.
+    // Tells everyone whose turn it is (player_turn). The player whose turn
+    // it is also gets "legalCards": the cards the rules let them play now.
     void announceTurn(GameManager& game, int seatIndex);
+
+    // Called after the 13th trick of a round. Scoring is issue #69.
+    void finishRound(GameManager& game);
+
+    // Finds the game and seat this connection is playing in. Replies
+    // NOT_IN_GAME and returns false if there isn't one.
+    bool findSeat(Connection& conn, const Message& request, GameManager*& game, int& seat);
 
     // Sends a server-initiated message to ONE seat at the table.
     void sendToSeat(const GameManager& game, int seatIndex, const QString& command,

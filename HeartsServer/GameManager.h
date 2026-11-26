@@ -68,7 +68,8 @@ public:
     // {"lobbyId":1,"host":"alice","playerCount":3}
     QJsonObject summary() const;
 
-    // "Waiting for players" / "In game - round 1, passing left", for the monitor window.
+    // "Waiting for players" / "In game - round 1, passing left" /
+    // "In game - round 1, trick 5", for the monitor window.
     QString stateText() const;
 
 private:

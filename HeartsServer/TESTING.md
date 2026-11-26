@@ -271,12 +271,34 @@ _Get 4 logged-in clients into one lobby (section L) and have the host send `star
 | M11 | Same player passes again | `ALREADY_PASSED` | |
 | M12 | No one else has passed yet | Nobody gets `cards_received` or `player_turn` yet | |
 | M13 | The other 3 pass | Each gets `cards_received`: `from` = the player before them, `cards` = exactly what that player passed, `hand` = 13 cards without the ones they passed | |
-| M14 | Right after M13 | All 4 get `player_turn` naming the player whose new `hand` has `"2C"`, with their `playerNum`, and `trick` 1 (TC 18) | |
+| M14 | Right after M13 | All 4 get `player_turn` naming the player whose new `hand` has `"2C"`, with their `playerNum`, `trick` 1 and `"leading":true`; only that player's copy has `"legalCards":["2C"]` (TC 18) | |
 | M15 | Anyone sends `pass_cards` after M14 | `NOT_PASSING_PHASE` | |
 | M16 | A player who isn't in a game sends `pass_cards` | `NOT_IN_GAME` | |
-| M17 | Monitor after M14 | `In game - round 1, playing` | |
+| M17 | Monitor after M14 | `In game - round 1, trick 1` | |
 
 _Rounds 2–4 (right, across, hold) can't be reached until scoring (#69) is built. The rotation was checked with a direct test of `Table`._
+
+## O. Playing tricks (#66 · use case 18 · test cases 19, 19.1)
+
+_Continue from section M (passing done, `player_turn` received). "Leader" = the player named in `player_turn`._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| O1 | Before passing finishes, anyone: `{"command":"play_card","requestId":30,"card":"2C"}` | `NOT_YOUR_TURN`, "cards are still being passed" | |
+| O2 | A player who isn't the leader plays a card | `NOT_YOUR_TURN` | |
+| O3 | Leader plays `"1X"` | `INVALID_CARDS` | |
+| O4 | Leader plays a card they don't have | `CARD_NOT_IN_HAND` | |
+| O5 | Leader plays anything but `"2C"` | `MUST_LEAD_TWO_OF_CLUBS` (TC 19.1) | |
+| O6 | Leader plays `"2C"` | Success with their new `hand` (12 cards); all 4 get `card_played` with `cardsOnTable` holding 1 card; the next seat gets `player_turn` with `legalCards` | |
+| O7 | Next player has a club but plays another suit | `MUST_FOLLOW_SUIT` (TC 19.1) | |
+| O8 | A player with **no clubs** on trick 1 tries a heart or `"QS"` (if they have another card) | `NO_POINTS_FIRST_TRICK` | |
+| O9 | All 4 play | Everyone gets `trick_won`: the highest club wins, `points` 0 (no points allowed on trick 1); then `player_turn` names the winner with `"leading":true` (TC 19) | |
+| O10 | Before any heart has been played, the leader leads a heart (and has other suits) | `HEARTS_NOT_BROKEN` | |
+| O11 | Someone who can't follow suit plays a heart | Accepted; `card_played` has `"heartsBroken":true`; hearts can now be led | |
+| O12 | A trick containing `"QS"` and 2 hearts | `trick_won` `points` = 15 | |
+| O13 | Compare `legalCards` with the rules in each `player_turn` | They always match what the server accepts | |
+| O14 | Play all 13 tricks | The points in all the `trick_won` messages add up to 26; every hand is empty | |
+| O15 | Monitor during play | `In game - round 1, trick N` | |
 
 ## N. Change password and ping (#86, #89 · use cases 4, 22 · test cases 4–4.3, 23)
 
@@ -309,6 +331,7 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ---
 
 ## Change log
+- **2026-11-25 (b):** Section O (playing tricks, #66); M14 and M17 updated for `legalCards` and the trick number.
 - **2026-11-25 (a):** Section N (change password and ping, #86 and #89).
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).

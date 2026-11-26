@@ -35,15 +35,20 @@ void Table::startNewRound()
 
     Deck deck;          // newDeck()
     deck.shuffle();
-    m_hands = deck.dealCards();
+    m_gameState.updateHands(deck.dealCards());   // also clears last round's tricks
 
     for (int i = 0; i < kSeats; ++i) {
         m_chosenPass[i].clear();
         m_received[i].clear();
     }
 
-    // Hold rounds skip passing entirely.
-    m_phase = (m_direction == PassDirection::Hold) ? Phase::Playing : Phase::Passing;
+    // Hold rounds skip passing entirely, so play starts now.
+    if (m_direction == PassDirection::Hold) {
+        m_phase = Phase::Playing;
+        m_gameState.beginPlay();
+    } else {
+        m_phase = Phase::Passing;
+    }
 }
 
 int Table::passTarget(int seatIndex) const
@@ -75,7 +80,7 @@ Table::PassResult Table::submitPass(int seatIndex, const std::vector<Card>& card
     if (static_cast<int>(cards.size()) != kCardsToPass)
         return PassResult::WrongCount;
 
-    const std::vector<Card>& hand = m_hands[seatIndex];
+    const std::vector<Card>& hand = m_gameState.hand(seatIndex);
     for (std::size_t i = 0; i < cards.size(); ++i) {
         if (std::find(hand.begin(), hand.end(), cards[i]) == hand.end())
             return PassResult::NotInHand;
@@ -98,30 +103,47 @@ bool Table::allPassed() const
 
 void Table::applyPasses()
 {
+    std::array<std::vector<Card>, kSeats>& hands = m_gameState.playerHands();
+
     // 1. Take every chosen card out of its owner's hand...
     for (int i = 0; i < kSeats; ++i)
         for (const Card& c : m_chosenPass[i])
-            m_hands[i].erase(std::find(m_hands[i].begin(), m_hands[i].end(), c));
+            hands[i].erase(std::find(hands[i].begin(), hands[i].end(), c));
 
     // 2. ...then give each set to its target, so nobody gets back what they
     //    just passed even in odd orderings.
     for (int i = 0; i < kSeats; ++i) {
         const int to = passTarget(i);
         m_received[to] = m_chosenPass[i];
-        m_hands[to].insert(m_hands[to].end(), m_chosenPass[i].begin(), m_chosenPass[i].end());
+        hands[to].insert(hands[to].end(), m_chosenPass[i].begin(), m_chosenPass[i].end());
     }
 
-    for (auto& hand : m_hands)
+    for (auto& hand : hands)
         std::sort(hand.begin(), hand.end());
     m_phase = Phase::Playing;
+    m_gameState.beginPlay();   // the 2 of Clubs holder is now the active player
 }
 
 int Table::leadSeat() const
 {
-    for (int i = 0; i < kSeats; ++i)
-        if (std::find(m_hands[i].begin(), m_hands[i].end(), kTwoOfClubs) != m_hands[i].end())
+    for (int i = 0; i < kSeats; ++i) {
+        const std::vector<Card>& hand = m_gameState.hand(i);
+        if (std::find(hand.begin(), hand.end(), kTwoOfClubs) != hand.end())
             return i;
+    }
     return 0;   // can't happen with a full deck
+}
+
+GameState::PlayResult Table::playCard(int seatIndex, const Card& card)
+{
+    if (m_phase != Phase::Playing || m_gameState.roundOver())
+        return GameState::PlayResult::NotYourTurn;
+    return m_gameState.placeCard(seatIndex, card);
+}
+
+GameState::TrickResult Table::determineTrickWinner()
+{
+    return m_gameState.finishTrick();
 }
 
 QString Table::directionName(PassDirection direction)

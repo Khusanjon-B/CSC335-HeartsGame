@@ -60,6 +60,15 @@ inline const QString NotPassingPhase  = "NOT_PASSING_PHASE";   // passing is ove
 inline const QString AlreadyPassed    = "ALREADY_PASSED";      // you already picked your 3 cards
 inline const QString InvalidCards     = "INVALID_CARDS";       // not 3 cards, bad code, not in your hand, or a duplicate
 
+// ---- in-game: playing a card (use case 18, issue #66) ----
+// (a bad card code is INVALID_CARDS; not seated at a game is NOT_IN_GAME)
+inline const QString NotYourTurn        = "NOT_YOUR_TURN";          // someone else is playing, or it's the passing phase
+inline const QString CardNotInHand      = "CARD_NOT_IN_HAND";       // you don't have that card
+inline const QString MustLeadTwoOfClubs = "MUST_LEAD_TWO_OF_CLUBS"; // first trick of a round opens with 2C
+inline const QString MustFollowSuit     = "MUST_FOLLOW_SUIT";       // you have a card of the led suit
+inline const QString NoPointsFirstTrick = "NO_POINTS_FIRST_TRICK";  // no hearts / QS on trick 1 (unless that's all you have)
+inline const QString HeartsNotBroken    = "HEARTS_NOT_BROKEN";      // can't lead hearts until one has been played
+
 // ---- recover_password ----
 inline const QString RecoveryFailed   = "RECOVERY_FAILED";     // username/email/pin don't match
 

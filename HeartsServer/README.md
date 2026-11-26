@@ -7,7 +7,8 @@ accounts (register / login / logout / change password / password recovery / lock
 a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** window lets
 the admin see who's connected, who's logged in, the registered count, and locked
 accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
-4-player game; the server then seats everyone, shuffles, deals, and runs the 3-card pass. Trick play isn't built yet.
+4-player game; the server then seats everyone, shuffles, deals, runs the 3-card pass, and checks every card played
+against the Hearts rules and decides who wins each trick.
 
 **Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md)
 
@@ -44,7 +45,8 @@ accounts, and unlock them. Players can create, list, join, and leave lobbies, an
 | Table setup: seats + scores 0 (#71) | ✅ Working (tested) |
 | Shuffle, deal 13 each, 3-card pass (left / right / across / hold) (#70) | ✅ Working (tested) |
 | 2 of Clubs holder prompted to lead trick 1 (#70) | ✅ Working (tested) |
-| Trick play, scoring, game end, play again (#66, #69, #68, #67) | ❌ Not started |
+| Card play with the Hearts rules, trick winner (#66) | ✅ Working (tested) |
+| Scoring, game end, play again (#69, #68, #67) | ❌ Not started |
 
 ---
 
@@ -76,8 +78,9 @@ Starting the server opens **two windows**:
 | `MonitorWindow.h/.cpp` | The Server Monitoring GUI window |
 | `GameManager.h/.cpp` | One game session: lobbyId, its `Lobby`, state (waiting / in game), join and start rules |
 | `Lobby.h` | The players in a lobby, in seat order (host first) |
-| `Table.h/.cpp` | The game table: seats, scores, hands, rounds, passing |
-| `Card.h` | One card, plus the `"QS"` / `"10H"` card codes |
+| `Table.h/.cpp` | The game table: seats, scores, rounds, passing, and playing cards |
+| `GameState.h/.cpp` | The cards in play in one round: hands, the current trick, whose turn, tricks taken, and the Hearts rules |
+| `Card.h` | One card, the `"QS"` / `"10H"` card codes, and card points |
 | `Deck.h` | 52-card deck: `newDeck()`, `shuffle()`, `dealCards()` |
 | `Database.h/.cpp` | All SQL. Every DB read and write goes through this class |
 | `PasswordHasher.h/.cpp` | Salted SHA-256: `hash()` for new secrets, `verify()` for checking them |
@@ -176,7 +179,10 @@ The short version:
 | _(server)_ `round_started` (private) | `lobbyId`, `round`, `passDirection`, `passTo`, `hand` | — |
 | _(server)_ `player_passed` | `lobbyId`, `username` | — |
 | _(server)_ `cards_received` (private) | `lobbyId`, `from`, `cards`, `hand` | — |
-| _(server)_ `player_turn` | `lobbyId`, `username`, `playerNum`, `trick` | — |
+| _(server)_ `player_turn` | `lobbyId`, `username`, `playerNum`, `trick`, `leading`, `legalCards` (only for that player) | — |
+| `play_card` | `card` | `NOT_LOGGED_IN`, `NOT_IN_GAME`, `INVALID_CARDS`, `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `MUST_LEAD_TWO_OF_CLUBS`, `MUST_FOLLOW_SUIT`, `NO_POINTS_FIRST_TRICK`, `HEARTS_NOT_BROKEN` |
+| _(server)_ `card_played` | `lobbyId`, `username`, `playerNum`, `card`, `trick`, `cardsOnTable`, `heartsBroken` | — |
+| _(server)_ `trick_won` | `lobbyId`, `username`, `playerNum`, `trick`, `cards`, `points` | — |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -300,6 +306,28 @@ The `Table` never sends messages itself. `Server::announceRound()`, `handlePassC
 
 ---
 
+## Playing tricks (#66 · use case 18)
+
+The cards in play live in a **`GameState`** (class diagram: `playerHands[][]`, `playerTricksTaken[][]`,
+`activePlayer`, `playedCards[]`, `placeCard()`), owned by the `Table` and reset every round.
+
+- **Turns:** `player_turn` goes to everyone. The player whose turn it is also gets `legalCards`, so the client can grey out the rest.
+- **Checking a card:** `GameState::validateCard()` applies the rules in order:
+  1. your turn and your card
+  2. the 2 of Clubs leads trick 1
+  3. follow suit
+  4. no hearts or Queen of Spades on trick 1 (unless that's all you have)
+  5. no leading hearts until they're broken (unless that's all you have)
+
+  Each broken rule has its own error code, and the player just picks again (use case 18 extension a).
+- **After each card:** everyone gets `card_played` with the whole trick so far (use case 18 step 2).
+- **After the 4th card:** `determineTrickWinner()` finds the highest card of the led suit. Everyone gets `trick_won`, and the winner leads next.
+- **After 13 tricks:** `Server::finishRound()` scores the round (#69).
+
+`legalCards()` uses the same `validateCard()`, so what the client is offered and what the server accepts can never disagree.
+
+---
+
 ## Passwords and pins
 
 `PasswordHasher` stores `hash = SHA-256(salt + secret)` with a new random 16-byte salt for
@@ -362,12 +390,19 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
-- [ ] Trick play, scoring, game end, play again (#66, #69, #68, #67)
+- [ ] Scoring, game end, play again (#69, #68, #67)
 - [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
 
 ---
 
 ## Change log
+
+### 2026-11-25 (b) — Playing tricks (#66)
+- **New class `GameState`** (class diagram). It holds the hands, the current trick, whose turn it is, tricks taken, and the Hearts rules. The `Table` owns one.
+- **New command `play_card`.** New events `card_played` and `trick_won`.
+- **`player_turn`** is now sent for every turn, with `leading`, and with `legalCards` for the player whose turn it is.
+- **New error codes:** `NOT_YOUR_TURN`, `CARD_NOT_IN_HAND`, `MUST_LEAD_TWO_OF_CLUBS`, `MUST_FOLLOW_SUIT`, `NO_POINTS_FIRST_TRICK`, `HEARTS_NOT_BROKEN`.
+- **Monitor** shows `In game - round 1, trick 5`.
 
 ### 2026-11-25 (a) — Change password + ping (#86, #89)
 - **New command `change_password`** (`currentPassword`, `newPassword`) for logged-in players (use case 4). New error code `SAME_PASSWORD`.
