@@ -69,6 +69,12 @@ inline const QString MustFollowSuit     = "MUST_FOLLOW_SUIT";       // you have 
 inline const QString NoPointsFirstTrick = "NO_POINTS_FIRST_TRICK";  // no hearts / QS on trick 1 (unless that's all you have)
 inline const QString HeartsNotBroken    = "HEARTS_NOT_BROKEN";      // can't lead hearts until one has been played
 
+// ---- disconnects and play again (issues #88, #67) ----
+inline const QString GamePaused         = "GAME_PAUSED";            // waiting for a disconnected player
+inline const QString GameNotPaused      = "GAME_NOT_PAUSED";        // disband_game only while paused
+inline const QString GameNotOver        = "GAME_NOT_OVER";          // play_again before game_ended
+inline const QString AlreadyVoted       = "ALREADY_VOTED";          // play_again twice
+
 // ---- recover_password ----
 inline const QString RecoveryFailed   = "RECOVERY_FAILED";     // username/email/pin don't match
 

@@ -160,6 +160,34 @@ private:
     // ---- match history (issue #87, use case 6) ----
     void handleGetMatchHistory(Connection& conn, const Message& request);
 
+    // ---- play again (issue #67, use case 21) ----
+    // Vote yes ({vote:true}, the default) or no. When all 4 say yes, a new
+    // game starts with the same players; a "no" ends it for everyone.
+    void handlePlayAgain(Connection& conn, const Message& request);
+
+    // ---- disconnects mid-game (issue #88, test case 19.2) ----
+
+    // Called when a logged-in connection drops. If it's a non-host seated
+    // at a running game, the game is paused (player_disconnected) and their
+    // seat is kept. Otherwise nothing happens here and the normal leave
+    // rules apply.
+    void pauseForDisconnect(Connection& conn);
+
+    // Called after every successful login. If this player has a seat in a
+    // paused game, puts them back (game_rejoined) and resumes it once
+    // nobody is missing.
+    void rejoinGame(Connection& conn);
+
+    // Host gives up waiting for a disconnected player: game_stopped for all.
+    void handleDisbandGame(Connection& conn, const Message& request);
+
+    // Replies GAME_PAUSED and returns true if the game is waiting for someone.
+    bool refuseIfPaused(Connection& conn, const Message& request, const GameManager& game);
+
+    // Sends `command` to everyone in the session, takes them all out of it,
+    // and deletes the GameManager. Used for host_left and game_stopped.
+    void disbandGame(GameManager& game, const QString& command, QJsonObject fields);
+
     // Finds the game and seat this connection is playing in. Replies
     // NOT_IN_GAME and returns false if there isn't one.
     bool findSeat(Connection& conn, const Message& request, GameManager*& game, int& seat);

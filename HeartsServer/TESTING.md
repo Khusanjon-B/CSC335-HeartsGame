@@ -4,7 +4,7 @@ A running checklist of tests a person runs by hand to check the server.
 **Add new tests whenever a server feature is added.** Don't delete old ones;
 they're the regression suite.
 
-_Last updated: 2026-11-25 (covers: scoring/game end/match history, trick play, change password/ping, dealing/passing, lobbies/game sessions, connections, protocol, error codes, register, login/logout,
+_Last updated: 2026-11-25 (covers: play again/disconnects, scoring/game end/match history, trick play, change password/ping, dealing/passing, lobbies/game sessions, connections, protocol, error codes, register, login/logout,
 lockout, password recovery, hashing, history, logging, console, monitoring GUI, DB schema)_
 
 ---
@@ -346,6 +346,32 @@ Keep a tally of each player's `trick_won` points per round._
 | P12 | Right after `start_game`, in DB Browser rename table `matches` to `matches_x` and click **Write Changes**; play to the end | `game_ended` still arrives, with `saved:false`, `matchId` -1, "An error occurred while trying to reach the database."; log says `COULD NOT SAVE the match` (UC 20 exception). Rename it back afterwards: `get_match_history` shows nothing half-saved | |
 | P13 | Restart the server, then `get_match_history` | The saved matches are still there | |
 
+## Q. Play again, leaving, and disconnecting mid-game (#67, #88 · use cases 10, 18b, 21 · test cases 12.2, 19.2, 22, 22.1)
+
+_4 clients: alice (host), bob, carol, dave. Use `gameOverScore=10` so games end quickly. "Close" = close that `send.py` window._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| Q1 | Mid-game, bob: `{"command":"play_again","requestId":80}` | `GAME_NOT_OVER` | |
+| Q2 | After `game_ended`, alice: `play_again` | Success, `votes:["alice"], needed:4`; the other 3 get `play_again_vote` | |
+| Q3 | alice: `play_again` again | `ALREADY_VOTED` | |
+| Q4 | bob, carol, dave: `play_again` | After the 4th vote, all 4 get `game_started` with the same `players` and `scores:[0,0,0,0]`, then `round_started` round 1 `left` (TC 22) | |
+| Q5 | After the next `game_ended`, alice votes yes, then bob: `{"command":"play_again","requestId":85,"vote":false}` | bob: success "you left the game"; alice, carol and dave get `game_stopped` with `reason:"declined"`; everyone's `leave_lobby` now says `NOT_IN_LOBBY` (TC 22.1) | |
+| Q6 | After a `game_ended`, carol: `leave_lobby` | The others get `game_stopped`, `reason:"player_left"`, "carol left, so there won't be a rematch." (TC 22.1) | |
+| Q7 | Mid-game, carol: `leave_lobby` | The others get `game_stopped`, "carol left, so the game was stopped."; the monitor shows no games | |
+| Q8 | Mid-game, nobody missing, alice: `disband_game` | `GAME_NOT_PAUSED` | |
+| Q9 | During passing (alice has already passed), **close** carol | The others get `player_disconnected` (carol, `playerNum` 3); the monitor shows `Paused - waiting for carol` (TC 19.2) | |
+| Q10 | bob: `pass_cards` | `GAME_PAUSED` | |
+| Q11 | bob: `disband_game` | `NOT_HOST` | |
+| Q12 | Open a new `send.py`, log in as carol | `login_result`, then `game_rejoined`: same `hand` as before, `phase:"passing"`, `hasPassed:false`, `passTo`, `waitingFor:[]`; the others get `player_reconnected` (TC 12.2) | |
+| Q13 | alice: `pass_cards` again | `ALREADY_PASSED` (her pass from before the drop was kept); the other 3 pass → `cards_received` as normal | |
+| Q14 | After the first card of a trick is down, **close** the player whose turn is next, then log them back in | `game_rejoined` has `phase:"playing"`, `cardsOnTable` with that card, `turn` = them; everyone gets `player_turn` again and theirs has `legalCards` | |
+| Q15 | Finish that game | It plays to `game_ended` normally | |
+| Q16 | New game; **close** dave; alice: `disband_game` | alice: success; bob and carol get `game_stopped`, `reason:"host_disbanded"` | |
+| Q17 | Log in as dave afterwards | `login_result` only, no `game_rejoined`; dave is on the main menu | |
+| Q18 | New game; **close** alice (the host) | The others get `host_left` (use case 10); the game is gone | |
+| Q19 | New game; **close** bob AND carol; log bob back in | bob's `game_rejoined` has `waitingFor:["carol"]`; still `GAME_PAUSED` until carol logs in too | |
+
 ---
 
 ## Failures
@@ -359,6 +385,7 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ---
 
 ## Change log
+- **2026-11-25 (d):** Section Q (play again, leaving, disconnect/rejoin, disband; #67 and #88).
 - **2026-11-25 (c):** Section P (scoring, game end, match history); H7 (v3→v4); H4 now expects 4; K6–K7 (`gameOverScore`); results now go in TEST_RESULTS.md.
 - **2026-11-25 (b):** Section O (playing tricks, #66); M14 and M17 updated for `legalCards` and the trick number.
 - **2026-11-25 (a):** Section N (change password and ping, #86 and #89).

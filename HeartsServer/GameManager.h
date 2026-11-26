@@ -11,10 +11,16 @@
 //   - a Table with the seats, cards and scores, created when the game
 //     starts (issues #71, #70)
 //
-//   start_lobby --> [WaitingForPlayers] --(4 players + host sends start_game)--> [InGame]
-//                         |    ^                                                    |
-//          join / leave --+----+                     someone reaches 100 (#69) --> [Finished]
+//   start_lobby --> [WaitingForPlayers] --(4 players + host sends start_game)--> [InGame] <-----+
+//                         |    ^                                                    |          |
+//          join / leave --+----+                     someone reaches 100 (#69) --> [Finished]  |
+//                                                     all 4 vote play_again (#67) -------------+
 //   host leaves (any state) --> disbanded
+//   anyone leaves InGame/Finished on purpose --> disbanded (a 3-player Hearts game can't go on)
+//
+// PAUSED (issue #88, test case 19.2): while InGame, a non-host player whose
+// connection drops is marked "disconnected" but keeps their seat. The game
+// is paused until they log back in (or the host disbands it).
 //
 // The GameManager only knows game rules and state. It never sends network
 // messages; the Server does that after asking the GameManager what changed.
@@ -26,7 +32,9 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <memory>
+#include <set>
 
 class GameManager
 {
@@ -67,6 +75,32 @@ public:
     // so the final scores can still be read.
     void endGame() { m_state = State::Finished; }
 
+    // ---- disconnects (issue #88) ----
+
+    // A seated player's connection dropped mid-game: pause the game.
+    void markDisconnected(int playerId) { m_disconnected.insert(playerId); }
+    // They logged back in.
+    void markReconnected(int playerId) { m_disconnected.erase(playerId); }
+    bool isDisconnected(int playerId) const { return m_disconnected.count(playerId) > 0; }
+    // Someone is missing, so nobody can play.
+    bool isPaused() const { return !m_disconnected.empty(); }
+    // Usernames of the missing players, in seat order.
+    QStringList disconnectedNames() const;
+
+    // ---- play again (issue #67, use case 21) ----
+
+    // Why voteToPlayAgain() refused. Each maps to a protocol error code.
+    enum class VoteResult { Ok, GameNotOver, AlreadyVoted };
+
+    // One player votes yes. Only after the game has Finished.
+    VoteResult voteToPlayAgain(int playerId);
+    QStringList playAgainVoters() const;   // who has voted yes, in seat order
+    bool allVotedToPlayAgain() const { return m_playAgainVotes.size() == Lobby::kMaxPlayers; }
+
+    // All 4 voted yes: a brand-new Table with the same players, scores back
+    // to 0, round 1 dealt (sequence diagram "playAgain()"). Back to InGame.
+    void playAgain();
+
     // The table, once the game has started; nullptr while still in the lobby.
     Table*       table() { return m_table.get(); }
     const Table* table() const { return m_table.get(); }
@@ -76,7 +110,8 @@ public:
     QJsonObject summary() const;
 
     // "Waiting for players" / "In game - round 1, passing left" /
-    // "In game - round 1, trick 5", for the monitor window.
+    // "In game - round 1, trick 5" / "Paused - waiting for bob" /
+    // "Game over after 6 round(s), 2/4 voted to play again", for the monitor window.
     QString stateText() const;
 
 private:
@@ -85,4 +120,6 @@ private:
     Lobby m_lobby;
     State m_state = State::WaitingForPlayers;
     std::unique_ptr<Table> m_table;   // created by startGame()
+    std::set<int> m_disconnected;     // playerIds that dropped mid-game
+    std::set<int> m_playAgainVotes;   // playerIds that voted yes
 };

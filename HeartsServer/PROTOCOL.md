@@ -280,13 +280,17 @@ Sent by the server on its own, for example when the operator types into the serv
 | `LOBBY_FULL` | join_lobby |
 | `GAME_ALREADY_STARTED` | join_lobby, start_game |
 | `NOT_IN_LOBBY` | leave_lobby, start_game |
-| `NOT_HOST` | start_game |
+| `NOT_HOST` | start_game, disband_game |
 | `LOBBY_NOT_FULL` | start_game |
-| `NOT_IN_GAME` | pass_cards, play_card |
+| `NOT_IN_GAME` | pass_cards, play_card, play_again, disband_game |
 | `NOT_PASSING_PHASE` | pass_cards |
 | `ALREADY_PASSED` | pass_cards |
 | `INVALID_CARDS` | pass_cards, play_card |
 | `NOT_YOUR_TURN` | play_card |
+| `GAME_PAUSED` | pass_cards, play_card |
+| `GAME_NOT_PAUSED` | disband_game |
+| `GAME_NOT_OVER` | play_again |
+| `ALREADY_VOTED` | play_again |
 | `CARD_NOT_IN_HAND` | play_card |
 | `MUST_LEAD_TWO_OF_CLUBS` | play_card |
 | `MUST_FOLLOW_SUIT` | play_card |
@@ -397,8 +401,8 @@ Once a game starts, its lobby closes. It disappears from `get_lobbies`, and `joi
 **Client note for `host_left`:** stop the game, show the "host left" popup, and go back to the home screen.
 The server has already taken you out of the lobby.
 
-> If a player disconnects **during** a game, the others get `player_left`. Test case 19.2
-> (wait for them to come back) belongs to the gameplay issues.
+> **Once a game has started,** leaving and disconnecting follow different rules. See
+> [Leaving and disconnecting during a game](#leaving-and-disconnecting-during-a-game-issue-88-test-cases-122-and-192).
 
 ---
 
@@ -562,7 +566,7 @@ After trick 13, everyone gets `round_ended`:
 ```
 - **Winner:** the **lowest** score wins. `places` is per seat (1 = winner).
   Tied scores share a place, so there can be more than one winner, e.g. `[3, 1, 1, 4]` with `winners: ["bob","carol"]`.
-- **What to show:** the final results screen, with **Play Again** and **Leave** options.
+- **What to show:** the final results screen, with **Play Again** (`play_again`) and **Leave** (`leave_lobby`, or `play_again` with `vote:false`) options.
 - **Saving:** the match is saved to every player's history.
   - **If the database can't be reached:** `saved` is `false`, `matchId` is `-1`, and `message` is "An error occurred while trying to reach the database."
   - **Results:** they're still shown either way.
@@ -590,3 +594,95 @@ After trick 13, everyone gets `round_ended`:
 |---|---|
 | `NOT_LOGGED_IN` | Not logged in |
 | `SERVER_ERROR` | Database problem ("Account systems could not be reached.") |
+
+---
+
+## Play again (`play_again`), use case 21, issue #67
+
+After `game_ended`, each player votes:
+```json
+{"command": "play_again", "requestId": 60}
+{"command": "play_again", "requestId": 61, "vote": false}
+```
+`vote` defaults to `true`.
+
+**Voting yes**
+```json
+{"command": "play_again_result", "requestId": 60, "success": true, "error": "", "message": "vote counted", "votes": ["alice"], "needed": 4}
+```
+The other players get `play_again_vote`:
+```json
+{"command": "play_again_vote", "requestId": -101, "lobbyId": 1, "username": "alice", "votes": ["alice"], "needed": 4}
+```
+When **all 4** have voted yes (test case 22), everyone gets `game_started` with the same players and
+`"scores":[0,0,0,0]`, then a new `round_started` for round 1. It's the same flow as the first game.
+
+**Voting no, leaving, logging out, or disconnecting** (test case 22.1): there's no rematch. Everyone else gets
+`game_stopped` (see below) and is back on the main menu. The player who voted no gets `success:true, "you left the game"`.
+
+| `error` | When |
+|---|---|
+| `NOT_IN_GAME` | You're not seated at a game |
+| `GAME_NOT_OVER` | There's been no `game_ended` yet |
+| `ALREADY_VOTED` | You already voted yes |
+
+---
+
+## Leaving and disconnecting during a game (issue #88, test cases 12.2 and 19.2)
+
+| What happens | Game in progress | Game over (voting on play again) |
+|---|---|---|
+| **The host** leaves, logs out, or disconnects | `host_left` to everyone; game over (use case 10) | `host_left`; no rematch |
+| **Anyone else** sends `leave_lobby` or `logout` | `game_stopped` (`reason: "player_left"`) to everyone; game over | `game_stopped`; no rematch |
+| **Anyone else's connection drops** | Game **paused**; others get `player_disconnected` | `game_stopped`; no rematch |
+
+**While paused:**
+- **Card actions:** `pass_cards` and `play_card` get `GAME_PAUSED`.
+- **The missing player logs back in:** they're put straight back into their seat with the same cards.
+  - They get `game_rejoined`.
+  - The others get `player_reconnected`.
+  - Once nobody is missing, play resumes: if cards were being played, everyone gets `player_turn` again.
+- **The host gives up waiting:** they send `disband_game`.
+
+```json
+{"command": "player_disconnected", "requestId": -40, "lobbyId": 1, "username": "carol", "playerNum": 3,
+ "message": "carol lost connection. Waiting for them to come back; the host can disband the game."}
+{"command": "player_reconnected", "requestId": -42, "lobbyId": 1, "username": "carol", "playerNum": 3}
+{"command": "game_stopped", "requestId": -45, "lobbyId": 1, "username": "carol", "reason": "player_left",
+ "message": "carol left, so the game was stopped."}
+```
+`game_stopped.reason` tells you why:
+- `"player_left"`: someone left on purpose
+- `"declined"`: someone voted no on play again
+- `"host_disbanded"`: the host used `disband_game`
+
+`username` is who caused it. After `game_stopped`, go back to the main menu; the server has already taken you out.
+
+### `game_rejoined` (server → the player who came back)
+Sent right after their `login_result`. It has everything needed to redraw the table:
+```json
+{"command": "game_rejoined", "requestId": -41, "lobbyId": 1, "players": ["alice", "bob", "carol", "dave"],
+ "playerNum": 3, "host": "alice", "scores": [12, 3, 0, 9], "round": 2, "passDirection": "right", "passTo": "bob",
+ "phase": "playing", "hasPassed": true, "hand": ["4C", "9D", "2S", "QS", "7H"], "trick": 9,
+ "cardsOnTable": [{"username": "bob", "playerNum": 2, "card": "KD"}], "heartsBroken": true,
+ "turn": "carol", "waitingFor": []}
+```
+- `phase`: `"passing"` or `"playing"`.
+- `hasPassed: false` while passing means you still need to send `pass_cards`.
+- `turn`: who plays next (empty while passing).
+- `waitingFor`: anyone **else** still missing. While it isn't empty, the game stays paused.
+
+### Disband a paused game (`disband_game`), host only
+```json
+{"command": "disband_game", "requestId": 70}
+```
+```json
+{"command": "disband_game_result", "requestId": 70, "success": true, "error": "", "message": "game disbanded"}
+```
+The others get `game_stopped` with `reason: "host_disbanded"`. A disconnected player who logs in later just lands on the main menu.
+
+| `error` | When |
+|---|---|
+| `NOT_IN_GAME` | You're not seated at a game |
+| `NOT_HOST` | Only the host can disband |
+| `GAME_NOT_PAUSED` | Nobody is disconnected (only allowed while waiting) |

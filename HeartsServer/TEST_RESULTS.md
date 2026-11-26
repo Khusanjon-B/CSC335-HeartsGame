@@ -27,8 +27,11 @@ protocols (results) while testing for final package").
 | 2026-11-25 | `3d03b6d` | Change password, ping (#86, #89) | N1–N10 | ✅ 10 / 10 |
 | 2026-11-25 | `e46fdfc` | Trick play (#66) + passing regression (#70, #71) | O1–O14, M1–M15 | ✅ all pass (3 full rounds) |
 | 2026-11-25 | `051535f` | Scoring, game end, match history (#69, #68, #87) | P1–P13, H7, K6–K7 | ✅ all pass |
+| 2026-11-25 | `eb2b48a` | Play again, leaving, disconnect/rejoin (#67, #88) | Q1–Q19 | ✅ 30 / 30 |
+| 2026-11-25 | `eb2b48a` | **Full regression** of every scripted test above on the final build | N, M, O, P, Q + unit | ✅ 0 failures |
 
-**Not yet run:** the GUI checks (J, M5, M17, O15, P7) were not re-run by hand for these changes. N11 isn't scripted. These need a manual pass.
+**Not yet run:** the GUI checks (J, M5, M17, O15, P7, the monitor text in Q9) were not re-run by hand for these
+changes. N11 isn't scripted. These need a manual pass.
 
 ---
 
@@ -110,6 +113,51 @@ protocols (results) while testing for final package").
 | H7 | **Copy** of the real `HeartsServer/build/hearts.db` (v3, 7 accounts) → log `upgraded from schema v3 to v4 (match tables added)`; afterwards `user_version 4`, 7 accounts, tables `players, players_old, matches, match_players` | ✅ |
 | K6 | `server.ini` with only `[games] gameOverScore=30` → the missing `port`, `maxFailedLogins`, `lockoutMinutes` lines were added, and 30 was kept | ✅ |
 | K7 | `gameOverScore=30` → the game ended after round 2 (38 ≥ 30) | ✅ |
+
+---
+
+## Run 2026-11-25 (d): play again, leaving, disconnect and rejoin
+
+- **Commit:** `eb2b48a` (branch `server-play-again-disconnect`)
+- **Run by:** Claude, scripted (4 clients, `gameOverScore=10`). "Close" = the script shut the client's socket.
+- **One false start, fixed:** the first attempt stalled because a line in the **test script** threw away bob's
+  `round_started`, so his bot never passed. After fixing the script, everything passed. It wasn't a server bug.
+
+| ID | Actual output | Result |
+|---|---|---|
+| Q1 | `play_again` mid-game → `error:"GAME_NOT_OVER"` | ✅ |
+| Q2 | alice → `votes:["alice"], needed:4`; bob, carol and dave got `play_again_vote` with `votes:["alice"]` | ✅ |
+| Q3 | alice again → `ALREADY_VOTED` | ✅ |
+| Q4 | 4th vote → all 4 got `game_started {players:[alice,bob,carol,dave], scores:[0,0,0,0]}` and `round_started {round:1, passDirection:"left"}` with 13 cards | ✅ |
+| Q5 | bob `vote:false` → `"you left the game"`; the others got `game_stopped {reason:"declined", username:"bob"}`; alice's and bob's `leave_lobby` → `NOT_IN_LOBBY` | ✅ |
+| Q6 | carol left after the game → `game_stopped {reason:"player_left", message:"carol left, so there won't be a rematch."}` | ✅ |
+| Q7 | carol left mid-game → `game_stopped {message:"carol left, so the game was stopped."}` | ✅ |
+| Q8 | `disband_game` with nobody missing → `GAME_NOT_PAUSED` | ✅ |
+| Q9 | carol closed during passing → alice, bob and dave got `player_disconnected {username:"carol", playerNum:3}`; log `game paused` | ✅ |
+| Q10 | bob `pass_cards` → `GAME_PAUSED` | ✅ |
+| Q11 | bob `disband_game` → `NOT_HOST` | ✅ |
+| Q12 | carol logged in → `game_rejoined` with the **same** 13-card hand, `phase:"passing"`, `hasPassed:false`, `passTo:"dave"`, `waitingFor:[]`; the others got `player_reconnected` | ✅ |
+| Q13 | alice `pass_cards` → `ALREADY_PASSED` (kept); after the others passed, all 4 got `cards_received` | ✅ |
+| Q14 | After `2C` was played, carol (next to play) was closed and logged back in → `game_rejoined {phase:"playing", trick:1, cardsOnTable:[{bob, "2C"}], turn:"carol"}`, 13 cards; all 4 got `player_turn` for carol, with `legalCards` in hers | ✅ |
+| Q15 | That game was played to `game_ended` | ✅ |
+| Q16 | dave closed, alice `disband_game` → success; bob and carol got `game_stopped {reason:"host_disbanded"}` | ✅ |
+| Q17 | dave logged in → `login_result` only, no `game_rejoined` | ✅ |
+| Q18 | alice (host) closed mid-game → bob, carol and dave got `host_left` | ✅ |
+| Q19 | bob and carol closed → bob logged in: `game_rejoined.waitingFor:["carol"]`, `pass_cards` → `GAME_PAUSED`; carol logged in: `waitingFor:[]`; bob's `pass_cards` → success | ✅ |
+
+### Full regression on `eb2b48a`
+Every scripted test from runs (a)–(d) was re-run against the final build:
+
+| Script | Tests | Result |
+|---|---|---|
+| Change password, ping (N) | 9 | ✅ 0 failures |
+| Dealing and passing (M) | 10 | ✅ 0 failures |
+| Trick play, 1 full round (O) | 13 | ✅ 0 failures |
+| Scoring, game end, history (P, `gameOverScore=30`) | 14 | ✅ 0 failures |
+| DB failure at game end (P12) | 2 | ✅ 0 failures |
+| Play again, disconnects (Q1–Q18) | 26 | ✅ 0 failures |
+| Two players missing (Q19) | 4 | ✅ 0 failures |
+| Unit: Shoot the Moon, ties, 100 limit (P2, P5) | 11 | ✅ 0 failures |
 
 ---
 

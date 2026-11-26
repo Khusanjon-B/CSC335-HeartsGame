@@ -9,7 +9,8 @@ the admin see who's connected, who's logged in, the registered count, and locked
 accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
 4-player game; the server then seats everyone, shuffles, deals, runs the 3-card pass, and checks every card played
 against the Hearts rules and decides who wins each trick. Rounds are scored (with Shoot the Moon) until someone
-reaches 100; then the match is saved and players can look up their match history and win/loss stats.
+reaches 100; then the match is saved and players can look up their match history and win/loss stats. All four can
+vote to play again. A player who drops out mid-game can log back in and carry on.
 
 **Message protocol:** [PROTOCOL.md](PROTOCOL.md) · **Manual test checklist:** [TESTING.md](TESTING.md) · **Test results:** [TEST_RESULTS.md](TEST_RESULTS.md)
 
@@ -50,7 +51,9 @@ reaches 100; then the match is saved and players can look up their match history
 | Round scoring + Shoot the Moon, next round or game end at 100 (#69) | ✅ Working (tested) |
 | Game end: final results, match saved to the DB (#68) | ✅ Working (tested) |
 | Match history + win/loss stats (`get_match_history`, #87, UC 6) | ✅ Working (tested) |
-| Play again (#67) | ❌ Not started |
+| Play again voting (#67, UC 21) | ✅ Working (tested) |
+| Disconnect mid-game pauses; rejoin on login; host can disband (#88) | ✅ Working (tested) |
+| Leaving a started game stops it for everyone (#88) | ✅ Working (tested) |
 
 ---
 
@@ -129,7 +132,8 @@ Every outgoing message goes through **`sendMessage`**, which adds `command` and
 2. `login` succeeds → `playerId`, `username`, and `verified` are filled in, and the DB row is marked connected.
 3. `start_lobby` / `join_lobby` → `lobbyId` is set. `leave_lobby` clears it (see [Game sessions](#game-sessions-and-lobbies-64-63--use-cases-811)).
 4. `logout` → they leave any lobby, the login fields are cleared, and the DB row is marked disconnected. The socket stays open.
-5. Socket disconnects → same as logout (including leaving the lobby), then they're removed from `m_connections`.
+5. Socket disconnects → same as logout, then they're removed from `m_connections`.
+   Exception: a non-host in a **running game** keeps their seat and the game pauses (#88). Their next `login` puts them back.
 
 ### `struct Connection`
 | Field | Type | Meaning |
@@ -192,6 +196,13 @@ The short version:
 | _(server)_ `round_ended` | `lobbyId`, `round`, `roundPoints`, `scores`, `shotTheMoon` | — |
 | _(server)_ `game_ended` | `lobbyId`, `players`, `scores`, `places`, `winners`, `rounds`, `matchId`, `saved`, `message` | — |
 | `get_match_history` | _(none)_ | `NOT_LOGGED_IN`, `SERVER_ERROR` |
+| `play_again` | `vote` (optional, default `true`) | `NOT_LOGGED_IN`, `NOT_IN_GAME`, `GAME_NOT_OVER`, `ALREADY_VOTED` |
+| `disband_game` | _(none)_; host, while paused | `NOT_LOGGED_IN`, `NOT_IN_GAME`, `NOT_HOST`, `GAME_NOT_PAUSED` |
+| _(server)_ `play_again_vote` | `lobbyId`, `username`, `votes`, `needed` | — |
+| _(server)_ `player_disconnected` / `player_reconnected` | `lobbyId`, `username`, `playerNum` (+ `message`) | — |
+| _(server)_ `game_rejoined` (private) | the whole table: `players`, `scores`, `round`, `phase`, `hand`, `cardsOnTable`, `turn`, ... | — |
+| _(server)_ `game_stopped` | `lobbyId`, `username`, `reason` (`player_left` / `declined` / `host_disbanded`), `message` | — |
+| `pass_cards`, `play_card` while paused | | `GAME_PAUSED` |
 
 ### Adding a new command
 1. Declare `void handleXxx(Connection& conn, const Message& request);` in `Server.h`.
@@ -283,14 +294,22 @@ The server creates one **`GameManager`** per game (class diagram, notes 10/6). E
 **`Lobby`**: the players in seat order, host first.
 
 ```
-start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [In game]
-                     |     ^
-      join / leave --+-----+        the host leaves (leave_lobby, logout, or disconnect) --> disbanded
+start_lobby --> [Waiting for players] --(4 players + host sends start_game)--> [In game] <-------------+
+                     |     ^                                                      |                    |
+      join / leave --+-----+                                 someone reaches 100 --> [Finished] --(4 x play_again)
+the host leaves (leave_lobby, logout, or disconnect), any state --> disbanded
 ```
-- **Seats:** `players[0]` is the host (`playerNum` 1). The others are in join order. When someone leaves, the players after them move up.
-- **Leaving:** `leave_lobby`, `logout`, and **disconnecting** all go through `Server::leaveLobby()`, so they behave the same.
-- **Host leaves:** everyone gets `host_left` and is taken out of the lobby, and the `GameManager` is deleted (use case 10).
-- **Non-host leaves:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
+- **Seats:** `players[0]` is the host (`playerNum` 1). The others are in join order. When someone leaves a lobby, the players after them move up.
+- **Leaving:** `leave_lobby`, `logout`, and disconnecting all go through `Server::leaveLobby()`. A disconnect during a running game goes through `pauseForDisconnect()` first.
+- **Host leaves:** everyone gets `host_left` and is taken out, and the `GameManager` is deleted (use case 10). This applies in every state.
+- **Non-host leaves a lobby:** the lobby stays open, and the others get `player_left` with the new `players` (use case 11 extension).
+- **Non-host leaves a started or finished game** (on purpose): Hearts needs 4 players, so everyone gets `game_stopped` and goes back to the menu (`Server::disbandGame()`).
+- **Non-host disconnects mid-game** (#88, test case 19.2):
+  - The game is **paused**. The player keeps their seat and cards, and the others get `player_disconnected`.
+  - **They log back in:** they get `game_rejoined` with the whole table state, and play resumes.
+  - **They don't come back:** the host can send `disband_game`.
+- **Play again** (#67, use case 21): after `game_ended`, all 4 send `play_again` → `GameManager::playAgain()` gives a new `Table` (same seats, scores 0) and deals round 1.
+  Any "no" vote, leave, or disconnect → `game_stopped` and everyone goes to the main menu (test case 22.1).
 - **Starting:** only the host can start, and only with exactly 4 players. The lobby then closes to new players.
 - **Game limit:** `maxConcurrentGames` in `server.ini` (default 1). A new `start_lobby` past the limit gets `COULD_NOT_CREATE_LOBBY`.
 - **Starting** creates the game's `Table` (see the next section).
@@ -434,12 +453,21 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 - [ ] No limit on wrong pin attempts. A 4-digit pin could be guessed by trying them all.
 - [ ] No email verification (the use cases mark it "may not be implemented").
 - [ ] `hearts.db` and the logs live in the build folder; deleting the build folder deletes them.
-- [ ] Play again (#67)
-- [ ] Reconnecting to a game after a disconnect (test case 19.2); for now the others just get `player_left`
+- [ ] A disconnected player who never comes back keeps the game paused until the host disbands it (no timeout yet; the notes mention a possible grace period)
+- [ ] GUI checks (section J, M5, M17, O15, P7, Q-monitor) haven't been re-run by hand since 11-23; see TEST_RESULTS.md
 
 ---
 
 ## Change log
+
+### 2026-11-25 (d) — Play again, leaving and disconnecting mid-game (#67, #88)
+- **New command `play_again`** (`vote`, default true). When all 4 vote yes, a new game starts with the same players and scores 0; a "no" vote ends it for everyone. New event `play_again_vote`.
+- **Disconnects:** a non-host dropping out of a running game **pauses** it (`player_disconnected`). Logging back in sends `game_rejoined` with the whole table, and play resumes (`player_reconnected`, then `player_turn`).
+- **New command `disband_game`** (host, while paused).
+- **Leaving on purpose:** a non-host leaving a started or finished game stops it for everyone (`game_stopped`, with a `reason`).
+- **New error codes:** `GAME_PAUSED`, `GAME_NOT_PAUSED`, `GAME_NOT_OVER`, `ALREADY_VOTED`.
+- **Monitor** shows `Paused - waiting for carol` and `… 2/4 voted to play again`.
+- **Refactor:** the code that disbands a game is now shared (`Server::disbandGame()`).
 
 ### 2026-11-25 (c) — Scoring, game end, match history (#69, #68, #87)
 - **Rounds are scored** with Shoot the Moon (`Table::updateScore()`), and everyone gets `round_ended`. Then the next round is dealt, or the game ends at `gameOverScore`.
