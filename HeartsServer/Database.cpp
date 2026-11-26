@@ -20,9 +20,11 @@
 #include <QSqlQuery>
 #include <QVariant>
 
-// Bump this whenever you change the players table layout, and add an
-// upgrade step for the old version in prepareSchema().
-static constexpr int kSchemaVersion = 3;
+// Bump this whenever you change a table layout, and add an upgrade step for
+// the old version in prepareSchema().
+//   v3: players with lockout columns
+//   v4: + matches and match_players (players unchanged)
+static constexpr int kSchemaVersion = 4;
 
 // Current time as text, e.g. "2026-11-16T23:41:07".
 static QString nowString()
@@ -109,6 +111,29 @@ bool Database::prepareSchema()
         logMessage("[DB] could not create players table: " + q.lastError().text());
         return false;
     }
+
+    // 3b. Match tables (v4). A v3 file simply doesn't have them yet, so
+    //     "IF NOT EXISTS" creates them and nothing else needs upgrading.
+    const bool matchesOk =
+        q.exec("CREATE TABLE IF NOT EXISTS matches ("
+               "  match_id   INTEGER PRIMARY KEY AUTOINCREMENT,"
+               "  played_at  TEXT    NOT NULL,"
+               "  rounds     INTEGER NOT NULL"
+               ")") &&
+        q.exec("CREATE TABLE IF NOT EXISTS match_players ("
+               "  match_id   INTEGER NOT NULL REFERENCES matches(match_id),"
+               "  player_id  INTEGER NOT NULL REFERENCES players(player_id),"
+               "  seat       INTEGER NOT NULL,"
+               "  score      INTEGER NOT NULL,"
+               "  place      INTEGER NOT NULL,"
+               "  PRIMARY KEY (match_id, player_id)"
+               ")");
+    if (!matchesOk) {
+        logMessage("[DB] could not create match tables: " + q.lastError().text());
+        return false;
+    }
+    if (tableExists && fileVersion == 3)
+        logMessage("[DB] upgraded from schema v3 to v4 (match tables added)");
 
     // 4. Remember that this file now has the current layout.
     q.exec("PRAGMA user_version = " + QString::number(kSchemaVersion));
@@ -316,4 +341,91 @@ std::optional<std::vector<LockedAccount>> Database::lockedAccounts()
         result.push_back({q.value(0).toString(),
                           QDateTime::fromString(q.value(1).toString(), Qt::ISODate)});
     return result;
+}
+
+// ===========================================================================
+//  Matches (issue #68, #87)
+// ===========================================================================
+
+std::optional<int> Database::saveMatch(int rounds, const std::vector<MatchPlayer>& players)
+{
+    // A transaction: either the match and all 4 player rows are saved, or
+    // none of them are (rollback), so a half-saved match can't exist.
+    if (!m_db.transaction()) {
+        logMessage("[DB] saveMatch: could not start transaction: " + m_db.lastError().text());
+        return std::nullopt;
+    }
+
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO matches (played_at, rounds) VALUES (?, ?)");
+    q.addBindValue(nowString());
+    q.addBindValue(rounds);
+    if (!q.exec()) {
+        logMessage("[DB] saveMatch failed: " + q.lastError().text());
+        m_db.rollback();
+        return std::nullopt;
+    }
+    const int matchId = q.lastInsertId().toInt();
+
+    for (const MatchPlayer& p : players) {
+        QSqlQuery row(m_db);
+        row.prepare("INSERT INTO match_players (match_id, player_id, seat, score, place) "
+                    "VALUES (?, ?, ?, ?, ?)");
+        row.addBindValue(matchId);
+        row.addBindValue(p.playerId);
+        row.addBindValue(p.seat);
+        row.addBindValue(p.score);
+        row.addBindValue(p.place);
+        if (!row.exec()) {
+            logMessage("[DB] saveMatch failed: " + row.lastError().text());
+            m_db.rollback();
+            return std::nullopt;
+        }
+    }
+
+    if (!m_db.commit()) {
+        logMessage("[DB] saveMatch: commit failed: " + m_db.lastError().text());
+        m_db.rollback();
+        return std::nullopt;
+    }
+    return matchId;
+}
+
+std::optional<std::vector<MatchRecord>> Database::getMatchHistory(int playerId)
+{
+    // Every player row of every match this player was in, newest match
+    // first, seats in order. One query, grouped into matches below.
+    QSqlQuery q(m_db);
+    q.prepare("SELECT m.match_id, m.played_at, m.rounds, "
+              "       mp.player_id, p.username, mp.seat, mp.score, mp.place "
+              "FROM matches m "
+              "JOIN match_players mp ON mp.match_id = m.match_id "
+              "JOIN players p        ON p.player_id = mp.player_id "
+              "WHERE m.match_id IN (SELECT match_id FROM match_players WHERE player_id = ?) "
+              "ORDER BY m.match_id DESC, mp.seat");
+    q.addBindValue(playerId);
+    if (!q.exec()) {
+        logMessage("[DB] getMatchHistory failed: " + q.lastError().text());
+        return std::nullopt;
+    }
+
+    std::vector<MatchRecord> matches;
+    while (q.next()) {
+        const int matchId = q.value(0).toInt();
+        if (matches.empty() || matches.back().matchId != matchId) {
+            MatchRecord m;
+            m.matchId  = matchId;
+            m.playedAt = QDateTime::fromString(q.value(1).toString(), Qt::ISODate);
+            m.rounds   = q.value(2).toInt();
+            matches.push_back(m);
+        }
+        MatchPlayer p;
+        p.playerId = q.value(3).toInt();
+        p.username = q.value(4).toString();
+        p.seat     = q.value(5).toInt();
+        p.score    = q.value(6).toInt();
+        p.place    = q.value(7).toInt();
+        matches.back().players.push_back(p);
+    }
+    return matches;
 }

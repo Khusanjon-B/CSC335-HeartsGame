@@ -149,8 +149,16 @@ private:
     // it is also gets "legalCards": the cards the rules let them play now.
     void announceTurn(GameManager& game, int seatIndex);
 
-    // Called after the 13th trick of a round. Scoring is issue #69.
+    // Called after the 13th trick of a round: scores it (round_ended), then
+    // deals the next round, or ends the game if someone reached 100 (#69).
     void finishRound(GameManager& game);
+
+    // The game is over: saves the match to the DB and sends game_ended with
+    // the final scores, places and winners (#68, use case 20).
+    void endGame(GameManager& game);
+
+    // ---- match history (issue #87, use case 6) ----
+    void handleGetMatchHistory(Connection& conn, const Message& request);
 
     // Finds the game and seat this connection is playing in. Replies
     // NOT_IN_GAME and returns false if there isn't one.

@@ -131,6 +131,7 @@ void Server::registerHandlers()
     m_handlers["start_game"]       = &Server::handleStartGame;
     m_handlers["pass_cards"]       = &Server::handlePassCards;
     m_handlers["play_card"]        = &Server::handlePlayCard;
+    m_handlers["get_match_history"] = &Server::handleGetMatchHistory;
 }
 
 bool Server::start(quint16 port)
@@ -650,7 +651,8 @@ void Server::handleStartLobby(Connection& conn, const Message& request)
                          "no additional games can be created at this time");
 
     const int lobbyId = m_nextLobbyId++;
-    m_games.push_back(std::make_unique<GameManager>(lobbyId, LobbyPlayer{*conn.playerId, conn.username}));
+    m_games.push_back(std::make_unique<GameManager>(lobbyId, LobbyPlayer{*conn.playerId, conn.username},
+                                                    m_config.gameOverScore));
     conn.lobbyId = lobbyId;
     const GameManager& game = *m_games.back();
 
@@ -1063,11 +1065,144 @@ void Server::handlePlayCard(Connection& conn, const Message& request)
     emit stateChanged();
 }
 
+// ===========================================================================
+//  Scoring and game end (issue #69 / use case 19, issue #68 / use case 20)
+//
+//    everyone <- round_ended {round, roundPoints, scores, shotTheMoon}
+//    then, if nobody has reached 100:
+//    each seat <- round_started ...the next round (pass direction rotates)
+//    or, if someone has:
+//    everyone <- game_ended {players, scores, places, winners, matchId, saved}
+// ===========================================================================
+
+static QJsonArray intsToJson(const std::array<int, Table::kSeats>& values)
+{
+    QJsonArray array;
+    for (int v : values)
+        array.append(v);
+    return array;
+}
+
 void Server::finishRound(GameManager& game)
 {
-    // Scoring (Shoot the Moon, the 100-point check) is issue #69.
-    logMessage(QString("[Game] lobby %1: round %2 finished")
-                   .arg(game.lobbyId()).arg(game.table()->roundNumber()));
+    Table& table = *game.table();
+
+    // Use case 19 steps 1-2: score the round (with Shoot the Moon) and show
+    // everyone the new totals.
+    const Table::RoundScore round = table.updateScore();
+    const QString shooter = round.moonShooter >= 0 ? table.seat(round.moonShooter).username : QString();
+    sendToLobby(game, "round_ended",
+                {{"round",       table.roundNumber()},
+                 {"roundPoints", intsToJson(round.points)},
+                 {"scores",      intsToJson(table.scores())},
+                 {"shotTheMoon", shooter}});   // "" if nobody did
+    logMessage(QString("[Game] lobby %1: round %2 scored, totals %3/%4/%5/%6%7")
+                   .arg(game.lobbyId()).arg(table.roundNumber())
+                   .arg(table.scores()[0]).arg(table.scores()[1])
+                   .arg(table.scores()[2]).arg(table.scores()[3])
+                   .arg(shooter.isEmpty() ? QString() : ", \"" + shooter + "\" shot the moon"));
+
+    // Use case 19 step 3: nobody at 100 yet -> deal the next round
+    // (use case 17 again). Otherwise the game is over (use case 20).
+    if (!table.gameOver()) {
+        table.startNewRound();
+        announceRound(game);
+        return;
+    }
+    endGame(game);
+}
+
+void Server::endGame(GameManager& game)
+{
+    game.endGame();
+    const Table& table = *game.table();
+    const std::array<int, Table::kSeats> places = table.places();
+
+    // Use case 20 step 2: record the match for every player ("saveMatch" in
+    // the class diagram). Wins/losses are counted from these rows.
+    std::vector<MatchPlayer> rows;
+    QJsonArray players, winners;
+    for (int s = 0; s < Table::kSeats; ++s) {
+        rows.push_back({table.seat(s).playerId, table.seat(s).username, s, table.scores()[s], places[s]});
+        players.append(table.seat(s).username);
+        if (places[s] == 1)
+            winners.append(table.seat(s).username);
+    }
+    const std::optional<int> matchId = m_db.saveMatch(table.roundNumber(), rows);
+
+    // Use case 20 step 1: show the final results and the choice to play
+    // again or leave (play again is issue #67). Use case 20 exception: if
+    // the match couldn't be saved, say so, but still show the results.
+    sendToLobby(game, "game_ended",
+                {{"players", players},
+                 {"scores",  intsToJson(table.scores())},
+                 {"places",  intsToJson(places)},
+                 {"winners", winners},
+                 {"rounds",  table.roundNumber()},
+                 {"matchId", matchId ? *matchId : -1},
+                 {"saved",   matchId.has_value()},
+                 {"message", matchId ? QString("Game over!")
+                                     : QString("An error occurred while trying to reach the database.")}});
+
+    QStringList winnerNames;
+    for (const QJsonValue& w : winners)
+        winnerNames << w.toString();
+    logMessage(QString("[Game] lobby %1: game over after %2 round(s); winner(s): %3; %4")
+                   .arg(game.lobbyId()).arg(table.roundNumber()).arg(winnerNames.join(", "))
+                   .arg(matchId ? "saved as match " + QString::number(*matchId)
+                                : QString("COULD NOT SAVE the match")));
+    emit stateChanged();
+}
+
+// get_match_history {}  ->  get_match_history_result {matches, stats}
+// Use case 6 / issue #87 ("getMatchHistory" in the class diagram).
+void Server::handleGetMatchHistory(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+
+    const auto history = m_db.getMatchHistory(*conn.playerId);
+    if (!history)   // use case 6 exception
+        return replyFail(conn, request, ErrorCode::ServerError, "Account systems could not be reached.");
+
+    QJsonArray matches;
+    int wins = 0;
+    for (const MatchRecord& m : *history) {
+        QJsonArray players;
+        int myScore = 0, myPlace = 0;
+        for (const MatchPlayer& p : m.players) {
+            players.append(QJsonObject{{"username", p.username}, {"score", p.score}, {"place", p.place}});
+            if (p.playerId == *conn.playerId) {
+                myScore = p.score;
+                myPlace = p.place;
+            }
+        }
+        if (myPlace == 1)
+            ++wins;
+        matches.append(QJsonObject{
+            {"matchId",  m.matchId},
+            {"playedAt", m.playedAt.toString(Qt::ISODate)},
+            {"rounds",   m.rounds},
+            {"players",  players},       // seat order
+            {"score",    myScore},       // this player's final score
+            {"place",    myPlace},       // this player's place (1 = won)
+            {"won",      myPlace == 1},
+        });
+    }
+
+    // Statistics ("MatchHistory: matchCount, winLosePercentage").
+    const int played = static_cast<int>(history->size());
+    const QJsonObject stats{
+        {"gamesPlayed",   played},
+        {"wins",          wins},
+        {"losses",        played - wins},
+        {"winPercentage", played == 0 ? 0 : qRound(100.0 * wins / played)},
+    };
+
+    // Test case 6.1: no matches -> empty list and a clear message.
+    replyOk(conn, request,
+            played == 0 ? "No matches played yet." : QString("%1 match(es) played").arg(played),
+            {{"matches", matches}, {"stats", stats}});
 }
 
 std::vector<Server::GameInfo> Server::viewHeartsGames() const

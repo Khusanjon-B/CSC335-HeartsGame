@@ -23,6 +23,14 @@
 //   locked_until     TEXT     ISO timestamp; locked while this is in the
 //                             future, NULL/past = not locked                   [v3]
 //
+// Tables: matches + match_players   (schema version 4, issue #68)
+// "Match DB" in the class diagram. One matches row per finished game, and
+// one match_players row per player in it:
+//   matches        match_id (auto), played_at (ISO time), rounds
+//   match_players  match_id, player_id, seat (0-3), score, place (1 = won)
+// A player's statistics (games, wins, losses) are counted from these rows,
+// so they can never get out of step with the match list.
+//
 // SCHEMA VERSION: SQLite has a built-in number slot, "PRAGMA user_version",
 // that remembers which table layout the file has. See prepareSchema() in
 // Database.cpp for how older files are upgraded.
@@ -59,6 +67,25 @@ struct PlayerRecord
     {
         return lockedUntil.isValid() && lockedUntil > QDateTime::currentDateTime();
     }
+};
+
+// One player's line in a finished match.
+struct MatchPlayer
+{
+    int     playerId = -1;
+    QString username;
+    int     seat = 0;    // 0-3, seat order at the table
+    int     score = 0;   // final score (lower is better in Hearts)
+    int     place = 1;   // 1 = winner; tied scores share a place
+};
+
+// One finished match ("RecordedMatch" in the class diagram).
+struct MatchRecord
+{
+    int       matchId = -1;
+    QDateTime playedAt;
+    int       rounds = 0;
+    std::vector<MatchPlayer> players;   // in seat order
 };
 
 // One entry in the locked-accounts list shown to the admin.
@@ -122,6 +149,17 @@ public:
     // Admin unlock (use case 7.2): clears the lock and the failed count.
     // Returns false if the query failed or no such username exists.
     bool unlockAccount(const QString& username);
+
+    // ---- matches (issue #68 "saveMatch", issue #87 "getMatchHistory") ----
+
+    // Saves a finished game: one matches row plus a match_players row per
+    // player, all-or-nothing (a transaction). Returns the new match_id, or
+    // std::nullopt if the database couldn't be written.
+    std::optional<int> saveMatch(int rounds, const std::vector<MatchPlayer>& players);
+
+    // Every match this player took part in, newest first.
+    // std::nullopt = DB error; an empty list = no matches played yet.
+    std::optional<std::vector<MatchRecord>> getMatchHistory(int playerId);
 
     // ---- Server Monitoring GUI queries ----
 
