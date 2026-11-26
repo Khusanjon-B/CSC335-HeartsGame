@@ -51,7 +51,7 @@ inline Message makeMessage(Message::Direction direction, const QJsonObject& body
 // If the protocol gets a new secret field, add its name to this list.
 inline QJsonObject redactSecrets(QJsonObject body)
 {
-    static const QStringList secretFields = { "password", "newPassword", "pin" };
+    static const QStringList secretFields = { "password", "newPassword", "currentPassword", "pin" };
     for (const QString& field : secretFields)
         if (body.contains(field))
             body[field] = "***";

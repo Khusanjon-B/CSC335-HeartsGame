@@ -187,6 +187,52 @@ The account must **not** be logged in anywhere. After a reset, the player logs i
 
 ---
 
+## Change Password (`change_password`) — use case 4, issue #86
+
+For a **logged-in** player who knows their current password. (Forgot it? That's `recover_password`, used while logged out.)
+
+**Client**
+```json
+{"command": "change_password", "requestId": 5, "currentPassword": "Hearts#2026", "newPassword": "N3wHearts#26"}
+```
+
+**Server, success**
+```json
+{"command": "change_password_result", "requestId": 5, "success": true, "error": "", "message": "password changed"}
+```
+The player stays logged in. Next time they log in, they use the new password.
+
+| `error` | When | Test case |
+|---|---|---|
+| `NOT_LOGGED_IN` | Not logged in | |
+| `MISSING_FIELDS` | Either field missing or blank | |
+| `INVALID_CREDENTIALS` | `currentPassword` is wrong ("your current password is incorrect") | 4.1 |
+| `INVALID_PASSWORD` | `newPassword` breaks the password rule | 4.2 |
+| `SAME_PASSWORD` | `newPassword` is the same as the current one | 4.3 |
+| `SERVER_ERROR` | Database problem ("Account systems could not be reached.") | |
+
+A wrong current password does **not** count toward the login lockout.
+
+---
+
+## Ping (`ping`) — use case 22, issue #89
+
+Checks that the server is reachable. Works **before login** too.
+
+```json
+{"command": "ping", "requestId": 6}
+```
+```json
+{"command": "ping_result", "requestId": 6, "success": true, "error": "", "message": "pong", "serverTime": "2026-11-25T14:03:00"}
+```
+
+**Retry rules (use case 22, for the client):**
+- If 3 pings in a row get no reply, show "could not reach the server".
+- A request with no reply may be resent up to 5 times **with the same `requestId`**, so the reply can still be matched up.
+  After 5 tries, show a connection error.
+
+---
+
 ## Error (`error`)
 
 Sent by the server when a message is broken badly enough that no command can handle it.
@@ -218,16 +264,16 @@ Sent by the server on its own, for example when the operator types into the serv
 | Code | Used by |
 |---|---|
 | `""` (empty) | Every successful `*_result` |
-| `MISSING_FIELDS` | register, login, recover_password |
+| `MISSING_FIELDS` | register, login, recover_password, change_password, join_lobby |
 | `INVALID_USERNAME` | register |
-| `INVALID_PASSWORD` | register, recover_password |
+| `INVALID_PASSWORD` | register, recover_password, change_password |
 | `INVALID_EMAIL` | register |
 | `INVALID_PIN` | register |
-| `INVALID_CREDENTIALS` | register (username or email taken), login |
+| `INVALID_CREDENTIALS` | register (username or email taken), login, change_password (wrong current password) |
 | `ALREADY_LOGGED_IN` | login |
 | `ACCOUNT_IN_USE` | login, recover_password |
 | `ACCOUNT_LOCKED` | login |
-| `NOT_LOGGED_IN` | logout, all lobby commands |
+| `NOT_LOGGED_IN` | logout, change_password, all lobby and game commands |
 | `ALREADY_IN_LOBBY` | start_lobby, join_lobby |
 | `COULD_NOT_CREATE_LOBBY` | start_lobby |
 | `LOBBY_NOT_FOUND` | join_lobby |
@@ -241,7 +287,8 @@ Sent by the server on its own, for example when the operator types into the serv
 | `ALREADY_PASSED` | pass_cards |
 | `INVALID_CARDS` | pass_cards |
 | `RECOVERY_FAILED` | recover_password |
-| `SERVER_ERROR` | register, recover_password |
+| `SAME_PASSWORD` | change_password |
+| `SERVER_ERROR` | register, recover_password, change_password |
 | `INVALID_JSON` | error |
 | `MISSING_REQUEST_ID` | error |
 | `UNKNOWN_COMMAND` | error |

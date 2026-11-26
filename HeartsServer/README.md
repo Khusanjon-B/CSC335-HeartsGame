@@ -1,9 +1,9 @@
 # Hearts Server — Current State
 
-_Last updated: 2026-11-23_
+_Last updated: 2026-11-25_
 
 A Qt 6 app that accepts TCP connections from Hearts clients, handles
-accounts (register / login / logout / password recovery / lockout), and stores players in
+accounts (register / login / logout / change password / password recovery / lockout), and stores players in
 a SQLite database. The terminal shows the log, and a **Server Monitoring GUI** window lets
 the admin see who's connected, who's logged in, the registered count, and locked
 accounts, and unlock them. Players can create, list, join, and leave lobbies, and the host can start a
@@ -26,6 +26,8 @@ accounts, and unlock them. Players can create, list, join, and leave lobbies, an
 | Username / password rules, one email per account | ✅ Working (tested) |
 | `server.ini` config file | ✅ Working (tested) |
 | Password recovery with a pin | ✅ Working (tested) |
+| Change password while logged in (#86, UC 4) | ✅ Working (tested) |
+| `ping` connection check (#89, UC 22) | ✅ Working (tested) |
 | Salted SHA-256 for passwords and pins | ✅ Working |
 | Per-connection message history | ✅ Working (last 100 messages) |
 | Log file + terminal logging | ✅ Working |
@@ -158,6 +160,8 @@ The short version:
 | `login` | `username`, `password` | `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `ACCOUNT_LOCKED`, `ALREADY_LOGGED_IN`, `ACCOUNT_IN_USE` |
 | `logout` | _(none)_ | `NOT_LOGGED_IN` |
 | `recover_password` | `username`, `email`, `pin`, `newPassword` | `MISSING_FIELDS`, `RECOVERY_FAILED`, `ACCOUNT_IN_USE`, `INVALID_PASSWORD`, `SERVER_ERROR` |
+| `change_password` | `currentPassword`, `newPassword` | `NOT_LOGGED_IN`, `MISSING_FIELDS`, `INVALID_CREDENTIALS`, `INVALID_PASSWORD`, `SAME_PASSWORD`, `SERVER_ERROR` |
+| `ping` | _(none)_; works before login | — (reply has `serverTime`) |
 | `start_lobby` | _(none)_ | `NOT_LOGGED_IN`, `ALREADY_IN_LOBBY`, `COULD_NOT_CREATE_LOBBY` |
 | `get_lobbies` | _(none)_ | `NOT_LOGGED_IN` |
 | `join_lobby` | `lobbyId` | `NOT_LOGGED_IN`, `MISSING_FIELDS`, `LOBBY_NOT_FOUND`, `LOBBY_FULL`, `GAME_ALREADY_STARTED`, `ALREADY_IN_LOBBY` |
@@ -194,6 +198,7 @@ The short version:
 | One email = one account | Notes 10/1, test case 2.2 | `INVALID_CREDENTIALS` ("email already in use") |
 | One login per account at a time | Notes 10/27 | `ACCOUNT_IN_USE` |
 | No password recovery while the account is logged in | Notes 10/27 | `ACCOUNT_IN_USE` |
+| Change password: must know the current one, and the new one must differ | Use case 4, test cases 4.1–4.3 | `INVALID_CREDENTIALS`, `SAME_PASSWORD` |
 
 The notes also mention a 15–128 character password rule. That conflicts with the client's
 rule, so the server follows the client (it's the one already built). The limits are constants
@@ -298,7 +303,7 @@ The `Table` never sends messages itself. `Server::announceRound()`, `handlePassC
 ## Passwords and pins
 
 `PasswordHasher` stores `hash = SHA-256(salt + secret)` with a new random 16-byte salt for
-every password and pin. Both are kept as hex text. Login and recovery hash the input with
+every password and pin. Both are kept as hex text. Login, recovery and change password hash the input with
 the stored salt and compare the results. Plain-text passwords and pins are never stored or logged.
 
 This is a single SHA-256 pass: simple, and good enough for a class project.
@@ -363,6 +368,11 @@ with `***`. The exception is lines that aren't valid JSON, which are logged as-i
 ---
 
 ## Change log
+
+### 2026-11-25 (a) — Change password + ping (#86, #89)
+- **New command `change_password`** (`currentPassword`, `newPassword`) for logged-in players (use case 4). New error code `SAME_PASSWORD`.
+- `currentPassword` is added to the redacted fields, so it never reaches the log.
+- **New command `ping`** → `ping_result` with `serverTime` (use case 22). Works before login. The client retry rules are in PROTOCOL.md.
 
 ### 2026-11-23 (d) — Table setup, dealing, passing (#71, #70)
 - **New classes:** `Card`, `Deck`, and `Table`, from the class diagram.

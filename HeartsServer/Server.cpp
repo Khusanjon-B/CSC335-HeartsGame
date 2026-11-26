@@ -122,6 +122,8 @@ void Server::registerHandlers()
     m_handlers["login"]            = &Server::handleLogin;
     m_handlers["logout"]           = &Server::handleLogout;
     m_handlers["recover_password"] = &Server::handleRecoverPassword;
+    m_handlers["change_password"]  = &Server::handleChangePassword;
+    m_handlers["ping"]             = &Server::handlePing;
     m_handlers["start_lobby"]      = &Server::handleStartLobby;
     m_handlers["get_lobbies"]      = &Server::handleGetLobbies;
     m_handlers["join_lobby"]       = &Server::handleJoinLobby;
@@ -525,6 +527,69 @@ void Server::handleRecoverPassword(Connection& conn, const Message& request)
 
     logMessage("[Auth] password reset for \"" + username + "\"");
     replyOk(conn, request, "password changed, you can now log in");
+}
+
+// CHANGE PASSWORD (use case 4, issue #86)
+//   client:  {"command":"change_password","requestId":N,
+//             "currentPassword":"Hearts#2026","newPassword":"N3wHearts#26"}
+//   server:  change_password_result
+//
+// Unlike recover_password (for players who are logged OUT and forgot their
+// password), this is for a logged-IN player who knows their password.
+// Checks, in order (test cases 4.1, 4.2, 4.3):
+//   1. logged in, both fields present
+//   2. current password is right          else INVALID_CREDENTIALS
+//   3. new password follows the rules     else INVALID_PASSWORD
+//   4. new password differs from current  else SAME_PASSWORD
+// A wrong current password does NOT count toward the login lockout; the
+// player is already logged in, so there's nothing to protect by locking.
+void Server::handleChangePassword(Connection& conn, const Message& request)
+{
+    if (!requireLogin(conn, request))
+        return;
+
+    const QString currentPassword = request.body.value("currentPassword").toString();
+    const QString newPassword     = request.body.value("newPassword").toString();
+    if (currentPassword.isEmpty() || newPassword.isEmpty())
+        return replyFail(conn, request, ErrorCode::MissingFields,
+                         "currentPassword and newPassword are both required");
+
+    // Use case 4 exception: "Account systems could not be reached."
+    const std::optional<PlayerRecord> player = m_db.findPlayer(conn.username);
+    if (!player)
+        return replyFail(conn, request, ErrorCode::ServerError, "Account systems could not be reached.");
+
+    if (!PasswordHasher::verify(currentPassword, player->passwordHash, player->passwordSalt)) {
+        logMessage("[Auth] change password failed for \"" + conn.username + "\" (wrong current password)");
+        return replyFail(conn, request, ErrorCode::InvalidCredentials, "your current password is incorrect");
+    }
+    if (!isValidPassword(newPassword))
+        return replyFail(conn, request, ErrorCode::InvalidPassword, passwordRuleText());
+    if (newPassword == currentPassword)
+        return replyFail(conn, request, ErrorCode::SamePassword,
+                         "the new password must be different from the current one");
+
+    // New salt + hash, same as register and recovery.
+    if (!m_db.updatePassword(player->id, PasswordHasher::hash(newPassword)))
+        return replyFail(conn, request, ErrorCode::ServerError, "Account systems could not be reached.");
+
+    logMessage("[Auth] \"" + conn.username + "\" changed their password");
+    replyOk(conn, request, "password changed");
+}
+
+// PING (use case 22, issue #89)
+//   client:  {"command":"ping","requestId":N}
+//   server:  {"command":"ping_result","requestId":N,"success":true,"error":"",
+//             "message":"pong","serverTime":"2026-11-25T14:03:00"}
+//
+// Lets the client check the server is still there. Works before login.
+// Use case 22: the client shows an error after 3 unanswered pings, and may
+// resend any request up to 5 times (with the SAME requestId, so the reply
+// can be matched up).
+void Server::handlePing(Connection& conn, const Message& request)
+{
+    replyOk(conn, request, "pong",
+            {{"serverTime", QDateTime::currentDateTime().toString(Qt::ISODate)}});
 }
 
 // ===========================================================================

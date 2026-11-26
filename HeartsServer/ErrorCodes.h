@@ -62,4 +62,8 @@ inline const QString InvalidCards     = "INVALID_CARDS";       // not 3 cards, b
 
 // ---- recover_password ----
 inline const QString RecoveryFailed   = "RECOVERY_FAILED";     // username/email/pin don't match
+
+// ---- change_password (use case 4) ----
+// (a wrong current password is INVALID_CREDENTIALS; a weak new one is INVALID_PASSWORD)
+inline const QString SamePassword     = "SAME_PASSWORD";       // new password is the same as the current one
 }
