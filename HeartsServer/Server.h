@@ -17,6 +17,9 @@
 //   "login"             {username, password}                     -> "login_result"
 //   "logout"            {}                                       -> "logout_result"
 //   "recover_password"  {username, email, pin, newPassword}      -> "recover_password_result"
+//   "change_password"   {currentPassword, newPassword}           -> "change_password_result"
+//   "ping"              {}                                       -> "ping_result"
+//   ...plus the lobby and game commands listed in PROTOCOL.md.
 // Every reply is the command name + "_result", with "success", "error" and
 // "message". "error" is "" on success, or a code from ErrorCodes.h on failure.
 // Problems with the message itself get {"command":"error", "requestId", "error", "message"}.
@@ -124,6 +127,8 @@ private:
     void handleLogin(Connection& conn, const Message& request);
     void handleLogout(Connection& conn, const Message& request);
     void handleRecoverPassword(Connection& conn, const Message& request);
+    void handleChangePassword(Connection& conn, const Message& request);   // use case 4 (#86)
+    void handlePing(Connection& conn, const Message& request);             // use case 22 (#89)
 
     // ---- game sessions / lobbies (issue #64, #63; use cases 8-11) ----
     void handleStartLobby(Connection& conn, const Message& request);   // create + become host

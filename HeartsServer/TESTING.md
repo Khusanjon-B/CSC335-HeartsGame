@@ -278,6 +278,24 @@ _Get 4 logged-in clients into one lobby (section L) and have the host send `star
 
 _Rounds 2–4 (right, across, hold) can't be reached until scoring (#69) is built. The rotation was checked with a direct test of `Table`._
 
+## N. Change password and ping (#86, #89 · use cases 4, 22 · test cases 4–4.3, 23)
+
+_One `send.py` client. Register `alice` with password `Hearts#2026`._
+
+| ID | Send / do | Expected | Result |
+|---|---|---|---|
+| N1 | Not logged in: `{"command":"ping","requestId":1}` | `ping_result`, success, `"message":"pong"`, a `serverTime` (TC 23) | |
+| N2 | Not logged in: `change_password` | `NOT_LOGGED_IN` | |
+| N3 | Log in, then `{"command":"change_password","requestId":3,"newPassword":"N3wHearts#26"}` | `MISSING_FIELDS` | |
+| N4 | `change_password` with `"currentPassword":"Wrong#2026"` | `INVALID_CREDENTIALS`, "your current password is incorrect" (TC 4.1) | |
+| N5 | Right current password, `"newPassword":"short"` | `INVALID_PASSWORD` with the password rule (TC 4.2) | |
+| N6 | Right current password, new = current | `SAME_PASSWORD` (TC 4.3) | |
+| N7 | `{"command":"change_password","requestId":7,"currentPassword":"Hearts#2026","newPassword":"N3wHearts#26"}` | Success, "password changed"; still logged in (TC 4) | |
+| N8 | `logout`, then log in with the **old** password | `INVALID_CREDENTIALS` | |
+| N9 | Log in with `N3wHearts#26` | Success | |
+| N10 | Look at the log | Both passwords show as `"***"` | |
+| N11 | Stop the server, then send `ping` from the client | No reply (the client should show its connection error after 3 tries) | |
+
 ---
 
 ## Failures
@@ -291,6 +309,7 @@ _Write down any failing test here: ID, date, what happened, and whether it's fix
 ---
 
 ## Change log
+- **2026-11-25 (a):** Section N (change password and ping, #86 and #89).
 - **2026-11-16:** First version. Sections A–H.
 - **2026-11-19:** Added error codes to expected results; B11–B12 (error field); D13–D15 (logout, issue #59).
 - **2026-11-23 (d):** Section M (table setup, dealing, and passing, #71 and #70).
