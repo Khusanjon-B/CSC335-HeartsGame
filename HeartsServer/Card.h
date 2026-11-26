@@ -75,3 +75,17 @@ struct Card
 
 // The card that leads the first trick of every round (use case 17).
 inline const Card kTwoOfClubs{Suit::Clubs, 2};
+
+// The Queen of Spades: worth 13 points.
+inline const Card kQueenOfSpades{Suit::Spades, 12};
+
+// Penalty points for one card: every heart is 1, the Queen of Spades is 13,
+// everything else 0. A round has 26 points in total.
+inline int cardPoints(const Card& card)
+{
+    if (card.suit == Suit::Hearts)
+        return 1;
+    if (card == kQueenOfSpades)
+        return 13;
+    return 0;
+}

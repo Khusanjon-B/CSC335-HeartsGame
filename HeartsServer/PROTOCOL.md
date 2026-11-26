@@ -282,10 +282,16 @@ Sent by the server on its own, for example when the operator types into the serv
 | `NOT_IN_LOBBY` | leave_lobby, start_game |
 | `NOT_HOST` | start_game |
 | `LOBBY_NOT_FULL` | start_game |
-| `NOT_IN_GAME` | pass_cards |
+| `NOT_IN_GAME` | pass_cards, play_card |
 | `NOT_PASSING_PHASE` | pass_cards |
 | `ALREADY_PASSED` | pass_cards |
-| `INVALID_CARDS` | pass_cards |
+| `INVALID_CARDS` | pass_cards, play_card |
+| `NOT_YOUR_TURN` | play_card |
+| `CARD_NOT_IN_HAND` | play_card |
+| `MUST_LEAD_TWO_OF_CLUBS` | play_card |
+| `MUST_FOLLOW_SUIT` | play_card |
+| `NO_POINTS_FIRST_TRICK` | play_card |
+| `HEARTS_NOT_BROKEN` | play_card |
 | `RECOVERY_FAILED` | recover_password |
 | `SAME_PASSWORD` | change_password |
 | `SERVER_ERROR` | register, recover_password, change_password |
@@ -457,7 +463,74 @@ The cards stay in your hand until **all four** players have chosen; then everyon
 
 ### `player_turn` (server → everyone)
 ```json
-{"command": "player_turn", "requestId": -10, "lobbyId": 1, "username": "dave", "playerNum": 4, "trick": 1}
+{"command": "player_turn", "requestId": -10, "lobbyId": 1, "username": "dave", "playerNum": 4, "trick": 1, "leading": true, "legalCards": ["2C"]}
 ```
-If `username` is you, it's your turn. Right now this is only sent for the **first** trick (the 2 of Clubs
-holder leads). Playing cards and the turns after that are issue #66.
+- If `username` is you, it's your turn.
+- `leading` is `true` when this card starts the trick.
+- **`legalCards` is only in the copy sent to the player whose turn it is**: every card the rules let them play
+  right now. Grey out the rest of the hand.
+
+---
+
+## Playing tricks (use case 18, issue #66)
+
+### Rules the server checks
+1. Only the player named in the last `player_turn` may play, and only a card in their hand.
+2. The **first trick** of each round is led with the **2 of Clubs**.
+3. **Follow suit:** if you have a card of the suit that was led, you must play one.
+4. **No points on the first trick:** if you can't follow suit on trick 1, you can't play a heart or the
+   Queen of Spades, unless your hand has nothing else.
+5. **Hearts must be broken:** you can't **lead** a heart until a heart has been played in an earlier trick,
+   unless your hand is only hearts.
+
+The highest card **of the suit that was led** wins the trick. The winner takes the cards and leads the next trick.
+**Points:** each heart is 1 and the Queen of Spades is 13 (26 per round).
+
+### Order of messages for one trick
+```
+everyone   <- player_turn  {username, playerNum, trick, leading, legalCards (only for that player)}
+player     -> play_card    {card}
+player     <- play_card_result {hand}
+everyone   <- card_played  {username, playerNum, card, trick, cardsOnTable, heartsBroken}
+   ... repeated for the next 3 players ...
+everyone   <- trick_won    {username, playerNum, trick, cards, points}
+everyone   <- player_turn  ...the winner leads the next trick
+```
+After trick 13, the round is scored (see [Scoring](#scoring-and-the-end-of-a-round-use-case-19-issue-69)).
+
+### Play a card (`play_card`)
+```json
+{"command": "play_card", "requestId": 20, "card": "QS"}
+```
+```json
+{"command": "play_card_result", "requestId": 20, "success": true, "error": "", "message": "card played",
+ "hand": ["7C", "JC", "3D", "6D", "2S", "5S", "8S", "2H", "3H", "4H", "QH"]}
+```
+`hand` is your hand without the card you played.
+
+| `error` | When |
+|---|---|
+| `NOT_IN_GAME` | You're not seated at a started game |
+| `INVALID_CARDS` | `card` isn't a card code |
+| `NOT_YOUR_TURN` | It's someone else's turn, or cards are still being passed |
+| `CARD_NOT_IN_HAND` | You don't have that card |
+| `MUST_LEAD_TWO_OF_CLUBS` | Rule 2 |
+| `MUST_FOLLOW_SUIT` | Rule 3 |
+| `NO_POINTS_FIRST_TRICK` | Rule 4 |
+| `HEARTS_NOT_BROKEN` | Rule 5 |
+
+On any error nothing changes; it's still your turn, so pick another card (use case 18 extension a).
+
+### `card_played` (server → everyone)
+```json
+{"command": "card_played", "requestId": -12, "lobbyId": 1, "username": "dave", "playerNum": 4, "card": "2C", "trick": 1,
+ "cardsOnTable": [{"username": "dave", "playerNum": 4, "card": "2C"}], "heartsBroken": false}
+```
+`cardsOnTable` is the whole trick so far, in play order, so the table can be redrawn from it.
+
+### `trick_won` (server → everyone)
+```json
+{"command": "trick_won", "requestId": -20, "lobbyId": 1, "username": "bob", "playerNum": 2, "trick": 1,
+ "cards": ["2C", "9C", "KC", "4C"], "points": 0}
+```
+Clear the table. `points` is what this trick was worth. The next `player_turn` names the winner.

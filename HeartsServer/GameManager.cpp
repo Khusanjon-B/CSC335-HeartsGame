@@ -63,6 +63,6 @@ QString GameManager::stateText() const
         return "Waiting for players";
     const QString phase = m_table->phase() == Table::Phase::Passing
                               ? "passing " + Table::directionName(m_table->passDirection())
-                              : "playing";
+                              : QString("trick %1").arg(m_table->gameState().trickNumber());
     return QString("In game - round %1, %2").arg(m_table->roundNumber()).arg(phase);
 }

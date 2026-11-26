@@ -130,6 +130,7 @@ void Server::registerHandlers()
     m_handlers["leave_lobby"]      = &Server::handleLeaveLobby;
     m_handlers["start_game"]       = &Server::handleStartGame;
     m_handlers["pass_cards"]       = &Server::handlePassCards;
+    m_handlers["play_card"]        = &Server::handlePlayCard;
 }
 
 bool Server::start(quint16 port)
@@ -879,24 +880,48 @@ void Server::announceRound(GameManager& game)
 void Server::announceTurn(GameManager& game, int seatIndex)
 {
     const Table& table = *game.table();
-    sendToLobby(game, "player_turn",
-                {{"username",  table.seat(seatIndex).username},
-                 {"playerNum", seatIndex + 1},
-                 {"trick",     1}});
-    logMessage(QString("[Game] lobby %1: \"%2\" has the 2 of Clubs and leads")
-                   .arg(game.lobbyId()).arg(table.seat(seatIndex).username));
+    const GameState& state = table.gameState();
+
+    // Everyone gets the same player_turn (one shared id). The copy for the
+    // player whose turn it is also lists the cards they may play, so the
+    // client can grey out the rest (use case 18 extension a: "prompt the
+    // player to choose a valid card").
+    const qint64 id = m_nextServerRequestId--;
+    for (int seat = 0; seat < Table::kSeats; ++seat) {
+        QJsonObject fields{
+            {"username",  table.seat(seatIndex).username},
+            {"playerNum", seatIndex + 1},
+            {"trick",     state.trickNumber()},
+            {"leading",   state.isLeading()},   // true = this card starts the trick
+        };
+        if (seat == seatIndex)
+            fields["legalCards"] = cardsToJson(state.legalCards(seat));
+        sendToSeat(game, seat, "player_turn", fields, id);
+    }
+}
+
+bool Server::findSeat(Connection& conn, const Message& request, GameManager*& game, int& seat)
+{
+    if (!requireLogin(conn, request))
+        return false;
+    game = conn.lobbyId ? findGame(*conn.lobbyId) : nullptr;
+    const Table* table = game ? game->table() : nullptr;
+    seat = table ? table->seatOf(*conn.playerId) : -1;
+    if (seat < 0) {
+        replyFail(conn, request, ErrorCode::NotInGame, "you're not in a game");
+        return false;
+    }
+    return true;
 }
 
 // pass_cards {cards:[3 card codes]}  ->  pass_cards_result
 void Server::handlePassCards(Connection& conn, const Message& request)
 {
-    if (!requireLogin(conn, request))
+    GameManager* game = nullptr;
+    int seat = -1;
+    if (!findSeat(conn, request, game, seat))
         return;
-    GameManager* game = conn.lobbyId ? findGame(*conn.lobbyId) : nullptr;
-    Table* table = game ? game->table() : nullptr;
-    const int seat = table ? table->seatOf(*conn.playerId) : -1;
-    if (seat < 0)
-        return replyFail(conn, request, ErrorCode::NotInGame, "you're not in a game");
+    Table* table = game->table();
 
     // Read the card codes. Anything that isn't a real card is rejected.
     std::vector<Card> cards;
@@ -945,6 +970,104 @@ void Server::handlePassCards(Connection& conn, const Message& request)
     // Use case 17 step 3: the 2 of Clubs holder leads the first trick.
     announceTurn(*game, table->leadSeat());
     emit stateChanged();
+}
+
+// ===========================================================================
+//  In-game: playing tricks (issue #66 / use case 18 "Adjudicate a Trick")
+//
+//    player     -> play_card    {card:"QS"}
+//    player     <- play_card_result {hand}                 (your hand without it)
+//    everyone   <- card_played  {username, playerNum, card, trick, cardsOnTable, heartsBroken}
+//    then either
+//    everyone   <- player_turn  {username, playerNum, trick, leading, [legalCards]}   next player
+//    or, after the 4th card:
+//    everyone   <- trick_won    {username, playerNum, trick, cards, points}
+//    everyone   <- player_turn  ...the winner leads the next trick
+//  After trick 13 the round is scored (finishRound, issue #69).
+// ===========================================================================
+
+// play_card {card}  ->  play_card_result
+void Server::handlePlayCard(Connection& conn, const Message& request)
+{
+    GameManager* game = nullptr;
+    int seat = -1;
+    if (!findSeat(conn, request, game, seat))
+        return;
+    Table* table = game->table();
+
+    const QString code = request.body.value("card").toString();
+    const std::optional<Card> card = Card::fromCode(code);
+    if (!card)
+        return replyFail(conn, request, ErrorCode::InvalidCards,
+                         "\"" + code + "\" isn't a card (use codes like \"QS\", \"10H\")");
+
+    // Use case 18 step 1: validate against the Hearts rules (GameState.h).
+    // Use case 18 extension a: reject an invalid play; the player picks again.
+    switch (table->playCard(seat, *card)) {
+    case GameState::PlayResult::NotYourTurn:
+        return replyFail(conn, request, ErrorCode::NotYourTurn,
+                         table->phase() == Table::Phase::Passing ? "cards are still being passed"
+                                                                 : "it's not your turn");
+    case GameState::PlayResult::NotInHand:
+        return replyFail(conn, request, ErrorCode::CardNotInHand, "you don't have that card");
+    case GameState::PlayResult::MustLeadTwoOfClubs:
+        return replyFail(conn, request, ErrorCode::MustLeadTwoOfClubs,
+                         "the first trick must be led with the 2 of Clubs");
+    case GameState::PlayResult::MustFollowSuit:
+        return replyFail(conn, request, ErrorCode::MustFollowSuit,
+                         "you must follow suit (play a card of the suit that was led)");
+    case GameState::PlayResult::NoPointsFirstTrick:
+        return replyFail(conn, request, ErrorCode::NoPointsFirstTrick,
+                         "you can't play a heart or the Queen of Spades on the first trick");
+    case GameState::PlayResult::HeartsNotBroken:
+        return replyFail(conn, request, ErrorCode::HeartsNotBroken,
+                         "you can't lead hearts until hearts have been broken");
+    case GameState::PlayResult::Ok:
+        break;
+    }
+
+    const GameState& state = table->gameState();
+    replyOk(conn, request, "card played", {{"hand", cardsToJson(state.hand(seat))}});
+
+    // Use case 18 step 2: show everyone the trick so far.
+    QJsonArray onTable;
+    for (const GameState::PlayedCard& p : state.getPlayedCards())
+        onTable.append(QJsonObject{{"username", table->seat(p.seat).username},
+                                   {"playerNum", p.seat + 1},
+                                   {"card", p.card.code()}});
+    const int trick = state.trickNumber();
+    sendToLobby(*game, "card_played",
+                {{"username", conn.username}, {"playerNum", seat + 1}, {"card", card->code()},
+                 {"trick", trick}, {"cardsOnTable", onTable}, {"heartsBroken", state.heartsBroken()}});
+
+    // Use case 18 step 3: next player, until all four have played.
+    if (!state.trickComplete()) {
+        announceTurn(*game, state.getActivePlayer());
+        emit stateChanged();
+        return;
+    }
+
+    // Use case 18 step 4: the winner takes the trick.
+    const GameState::TrickResult result = table->determineTrickWinner();
+    const QString winner = table->seat(result.winnerSeat).username;
+    sendToLobby(*game, "trick_won",
+                {{"username", winner}, {"playerNum", result.winnerSeat + 1}, {"trick", trick},
+                 {"cards", cardsToJson(result.cards)}, {"points", result.points}});
+    logMessage(QString("[Game] lobby %1: trick %2 won by \"%3\" (%4 point(s))")
+                   .arg(game->lobbyId()).arg(trick).arg(winner).arg(result.points));
+
+    if (table->roundOver())
+        finishRound(*game);
+    else
+        announceTurn(*game, result.winnerSeat);   // the winner leads the next trick
+    emit stateChanged();
+}
+
+void Server::finishRound(GameManager& game)
+{
+    // Scoring (Shoot the Moon, the 100-point check) is issue #69.
+    logMessage(QString("[Game] lobby %1: round %2 finished")
+                   .arg(game.lobbyId()).arg(game.table()->roundNumber()));
 }
 
 std::vector<Server::GameInfo> Server::viewHeartsGames() const

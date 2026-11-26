@@ -9,6 +9,9 @@
 // Issue #70 (use case 17, Setup a Round): startNewRound() shuffles and deals
 //   13 cards each, then the 3-card pass happens in this round's direction,
 //   then the holder of the 2 of Clubs leads the first trick.
+// Issue #66 (use case 18, Adjudicate a Trick): playCard() and
+//   determineTrickWinner(). The cards in play live in the Table's GameState
+//   (class diagram: "Table 1 -- 1 GameState"); the rules are in GameState.h.
 //
 // PASS DIRECTION rotates every round (standard Hearts, "left right across
 // hold - 4 cycles" in the team notes):
@@ -25,6 +28,7 @@
 // ---------------------------------------------------------------------------
 
 #include "Card.h"
+#include "GameState.h"
 #include "Lobby.h"
 
 #include <QString>
@@ -68,7 +72,7 @@ public:
     int           roundNumber() const { return m_round; }
     PassDirection passDirection() const { return m_direction; }
     Phase         phase() const { return m_phase; }
-    const std::vector<Card>& hand(int seatIndex) const { return m_hands[seatIndex]; }
+    const std::vector<Card>& hand(int seatIndex) const { return m_gameState.hand(seatIndex); }
 
     // Which seat `seatIndex` passes to / receives from this round.
     int passTarget(int seatIndex) const;
@@ -86,7 +90,24 @@ public:
     const std::vector<Card>& receivedCards(int seatIndex) const { return m_received[seatIndex]; }
 
     // Seat holding the 2 of Clubs: they lead the first trick (use case 17 step 3).
+    // ("getLeadPlayer()" in the class diagram.)
     int leadSeat() const;
+
+    // ---- playing tricks (#66) ----
+
+    // The cards in play: hands, the current trick, whose turn, tricks taken.
+    const GameState& gameState() const { return m_gameState; }
+
+    // Plays one card for `seatIndex` if the rules allow it (see GameState.h).
+    // Only during the Playing phase; otherwise NotYourTurn.
+    GameState::PlayResult playCard(int seatIndex, const Card& card);
+
+    // After the 4th card of a trick: who won it, which cards, how many
+    // points. The winner leads next.
+    GameState::TrickResult determineTrickWinner();
+
+    // All 13 tricks of this round are done.
+    bool roundOver() const { return m_phase == Phase::Playing && m_gameState.roundOver(); }
 
     // "left" / "right" / "across" / "hold", as sent to clients.
     static QString directionName(PassDirection direction);
@@ -94,7 +115,7 @@ public:
 private:
     std::array<Seat, kSeats>              m_seats;
     std::array<int, kSeats>               m_scores{};   // all 0 (use case 16)
-    std::array<std::vector<Card>, kSeats> m_hands;
+    GameState                             m_gameState;  // hands + tricks for this round
     std::array<std::vector<Card>, kSeats> m_chosenPass; // cards picked this round, not moved yet
     std::array<std::vector<Card>, kSeats> m_received;   // cards each seat got in the pass
     int           m_round = 0;
