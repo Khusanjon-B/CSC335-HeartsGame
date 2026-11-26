@@ -49,6 +49,43 @@ GameManager::StartResult GameManager::startGame(int requestingPlayerId)
     return StartResult::Ok;
 }
 
+QStringList GameManager::disconnectedNames() const
+{
+    QStringList names;
+    for (const LobbyPlayer& p : m_lobby.players())
+        if (isDisconnected(p.playerId))
+            names << p.username;
+    return names;
+}
+
+GameManager::VoteResult GameManager::voteToPlayAgain(int playerId)
+{
+    if (m_state != State::Finished)
+        return VoteResult::GameNotOver;
+    if (!m_playAgainVotes.insert(playerId).second)   // insert() says false if already there
+        return VoteResult::AlreadyVoted;
+    return VoteResult::Ok;
+}
+
+QStringList GameManager::playAgainVoters() const
+{
+    QStringList names;
+    for (const LobbyPlayer& p : m_lobby.players())
+        if (m_playAgainVotes.count(p.playerId))
+            names << p.username;
+    return names;
+}
+
+void GameManager::playAgain()
+{
+    // Use case 21 step 2 / test case 22: same players, same seats, scores
+    // back to 0 (use case 16 again), then round 1 (use case 17).
+    m_playAgainVotes.clear();
+    m_table = std::make_unique<Table>(m_lobby.players(), m_gameOverScore);
+    m_table->startNewRound();
+    m_state = State::InGame;
+}
+
 QJsonObject GameManager::summary() const
 {
     return {
@@ -63,7 +100,10 @@ QString GameManager::stateText() const
     if (m_state == State::WaitingForPlayers || !m_table)
         return "Waiting for players";
     if (m_state == State::Finished)
-        return QString("Game over after %1 round(s)").arg(m_table->roundNumber());
+        return QString("Game over after %1 round(s), %2/%3 voted to play again")
+            .arg(m_table->roundNumber()).arg(m_playAgainVotes.size()).arg(Lobby::kMaxPlayers);
+    if (isPaused())
+        return "Paused - waiting for " + disconnectedNames().join(", ");
     const QString phase = m_table->phase() == Table::Phase::Passing
                               ? "passing " + Table::directionName(m_table->passDirection())
                               : QString("trick %1").arg(m_table->gameState().trickNumber());

@@ -132,6 +132,8 @@ void Server::registerHandlers()
     m_handlers["pass_cards"]       = &Server::handlePassCards;
     m_handlers["play_card"]        = &Server::handlePlayCard;
     m_handlers["get_match_history"] = &Server::handleGetMatchHistory;
+    m_handlers["play_again"]       = &Server::handlePlayAgain;
+    m_handlers["disband_game"]     = &Server::handleDisbandGame;
 }
 
 bool Server::start(quint16 port)
@@ -207,8 +209,13 @@ void Server::onDisconnected(QTcpSocket* socket)
     logMessage("disconnected  " + it->label() +
                "  (" + QString::number(it->history.size()) + " messages in history)");
 
+    // Issue #88 / test case 19.2: a non-host dropping out of a running game
+    // pauses it instead of ending it, so they can log back in and carry on.
     if (it->verified)
-        logoutConnection(*it);   // record the logout in the DB
+        pauseForDisconnect(*it);
+
+    if (it->verified)
+        logoutConnection(*it);   // record the logout in the DB (and leave any lobby)
 
     m_connections.erase(it);
 
@@ -467,6 +474,9 @@ void Server::handleLogin(Connection& conn, const Message& request)
                "\" (player " + QString::number(player->id) + ")");
     replyOk(conn, request, "welcome " + conn.username,
             {{"playerId", player->id}, {"username", conn.username}});
+
+    // Were they dropped from a game that's waiting for them? Put them back (#88).
+    rejoinGame(conn);
 }
 
 // LOGOUT (issue #59)
@@ -750,33 +760,52 @@ void Server::leaveLobby(Connection& conn)
     if (!game)
         return;
 
+    const bool started = game->state() != GameManager::State::WaitingForPlayers;
     const bool wasHost = game->removePlayer(*conn.playerId);
 
     if (wasHost) {
-        // Use case 10 / issue #63: the host left, so the session is
-        // disbanded. Everyone still in it gets host_left and goes back to
-        // the home screen (their lobbyId is cleared).
+        // Use case 10 / issue #63: the host left (in any state), so the
+        // session is disbanded and everyone goes back to the home screen.
         logMessage("[Game] host \"" + conn.username + "\" left lobby " + QString::number(lobbyId) +
                    "; lobby disbanded");
-        sendToLobby(*game, "host_left",
+        disbandGame(*game, "host_left",
                     {{"username", conn.username},
                      {"message", "The host left, so the game was disbanded."}});
-        for (const LobbyPlayer& p : game->lobby().players())
-            if (Connection* c = findConnectionByPlayer(p.playerId))
-                c->lobbyId.reset();
-
-        m_games.erase(std::remove_if(m_games.begin(), m_games.end(),
-                                     [lobbyId](const auto& g) { return g->lobbyId() == lobbyId; }),
-                      m_games.end());   // deletes the GameManager
+    } else if (started) {
+        // Issue #88 / use case 21 extension: someone left a started or
+        // finished game on purpose (leave_lobby or logout). Hearts needs
+        // 4 players, so the game stops and everyone goes back to the menu.
+        const bool finished = game->state() == GameManager::State::Finished;
+        logMessage("[Game] \"" + conn.username + "\" left game " + QString::number(lobbyId) +
+                   "; game stopped");
+        disbandGame(*game, "game_stopped",
+                    {{"username", conn.username},
+                     {"reason",   "player_left"},
+                     {"message",  finished ? conn.username + " left, so there won't be a rematch."
+                                           : conn.username + " left, so the game was stopped."}});
     } else {
         // Use case 11 extension: a player left before the session filled
         // up. Keep the lobby open and tell the others (who's left, new seats).
-        // (If the game had already started, the gameplay issues will decide
-        //  whether to wait for them to come back; see test case 19.2.)
         logMessage("[Game] \"" + conn.username + "\" left lobby " + QString::number(lobbyId));
         sendToLobby(*game, "player_left",
                     {{"username", conn.username}, {"players", game->lobby().playerNames()}});
     }
+    emit stateChanged();
+}
+
+void Server::disbandGame(GameManager& game, const QString& command, QJsonObject fields)
+{
+    // Tell everyone still in it, take them all out (their lobbyId is
+    // cleared, so they're back on the home screen), and delete the session.
+    sendToLobby(game, command, fields);
+    for (const LobbyPlayer& p : game.lobby().players())
+        if (Connection* c = findConnectionByPlayer(p.playerId))
+            c->lobbyId.reset();
+
+    const int lobbyId = game.lobbyId();
+    m_games.erase(std::remove_if(m_games.begin(), m_games.end(),
+                                 [lobbyId](const auto& g) { return g->lobbyId() == lobbyId; }),
+                  m_games.end());   // deletes the GameManager (don't use `game` after this)
     emit stateChanged();
 }
 
@@ -916,12 +945,21 @@ bool Server::findSeat(Connection& conn, const Message& request, GameManager*& ga
     return true;
 }
 
+bool Server::refuseIfPaused(Connection& conn, const Message& request, const GameManager& game)
+{
+    if (!game.isPaused())
+        return false;
+    replyFail(conn, request, ErrorCode::GamePaused,
+              "the game is paused until " + game.disconnectedNames().join(", ") + " reconnects");
+    return true;
+}
+
 // pass_cards {cards:[3 card codes]}  ->  pass_cards_result
 void Server::handlePassCards(Connection& conn, const Message& request)
 {
     GameManager* game = nullptr;
     int seat = -1;
-    if (!findSeat(conn, request, game, seat))
+    if (!findSeat(conn, request, game, seat) || refuseIfPaused(conn, request, *game))
         return;
     Table* table = game->table();
 
@@ -993,7 +1031,7 @@ void Server::handlePlayCard(Connection& conn, const Message& request)
 {
     GameManager* game = nullptr;
     int seat = -1;
-    if (!findSeat(conn, request, game, seat))
+    if (!findSeat(conn, request, game, seat) || refuseIfPaused(conn, request, *game))
         return;
     Table* table = game->table();
 
@@ -1203,6 +1241,186 @@ void Server::handleGetMatchHistory(Connection& conn, const Message& request)
     replyOk(conn, request,
             played == 0 ? "No matches played yet." : QString("%1 match(es) played").arg(played),
             {{"matches", matches}, {"stats", stats}});
+}
+
+// ===========================================================================
+//  Disconnects mid-game (issue #88; use case 18 extension b, test cases
+//  12.2 and 19.2)
+//
+//    a non-host's connection drops while the game is InGame:
+//      others  <- player_disconnected {username, playerNum, message}   game PAUSED
+//    while paused:  pass_cards / play_card -> GAME_PAUSED
+//    they log back in:
+//      them    <- game_rejoined {everything needed to redraw the table}
+//      others  <- player_reconnected {username, playerNum}
+//      everyone <- player_turn ...if nobody else is missing, play resumes
+//    or the host gives up waiting:
+//      host    -> disband_game
+//      others  <- game_stopped {reason:"host_disbanded"}
+// ===========================================================================
+
+void Server::pauseForDisconnect(Connection& conn)
+{
+    GameManager* game = conn.lobbyId ? findGame(*conn.lobbyId) : nullptr;
+    if (!game || game->state() != GameManager::State::InGame)
+        return;   // lobby or finished game: normal leave rules apply
+    if (game->lobby().isHost(*conn.playerId))
+        return;   // use case 10: the host leaving stops the game
+
+    // Keep their seat and cards; just mark them missing. Clearing
+    // conn.lobbyId means the logout that follows won't remove them.
+    game->markDisconnected(*conn.playerId);
+    conn.lobbyId.reset();
+
+    const int seat = game->table()->seatOf(*conn.playerId);
+    logMessage("[Game] \"" + conn.username + "\" disconnected from game " +
+               QString::number(game->lobbyId()) + "; game paused");
+    sendToLobby(*game, "player_disconnected",
+                {{"username",  conn.username},
+                 {"playerNum", seat + 1},
+                 {"message",   conn.username + " lost connection. Waiting for them to come back; "
+                               "the host can disband the game."}},
+                *conn.playerId);
+    emit stateChanged();
+}
+
+void Server::rejoinGame(Connection& conn)
+{
+    GameManager* game = nullptr;
+    for (auto& g : m_games)
+        if (g->isDisconnected(*conn.playerId))
+            game = g.get();
+    if (!game)
+        return;
+
+    game->markReconnected(*conn.playerId);
+    conn.lobbyId = game->lobbyId();
+    const Table& table = *game->table();
+    const GameState& state = table.gameState();
+    const int seat = table.seatOf(*conn.playerId);
+    const bool passing = table.phase() == Table::Phase::Passing;
+    const bool hold = table.passDirection() == Table::PassDirection::Hold;
+
+    QJsonArray onTable;
+    for (const GameState::PlayedCard& p : state.getPlayedCards())
+        onTable.append(QJsonObject{{"username", table.seat(p.seat).username},
+                                   {"playerNum", p.seat + 1},
+                                   {"card", p.card.code()}});
+    QJsonArray scores;
+    for (int s : table.scores())
+        scores.append(s);
+
+    // Everything the client needs to redraw the table from scratch.
+    sendMessage(conn, "game_rejoined", m_nextServerRequestId--,
+                {{"lobbyId",       game->lobbyId()},
+                 {"players",       game->lobby().playerNames()},
+                 {"playerNum",     seat + 1},
+                 {"host",          game->lobby().host().username},
+                 {"scores",        scores},
+                 {"round",         table.roundNumber()},
+                 {"passDirection", Table::directionName(table.passDirection())},
+                 {"passTo",        hold ? QString() : table.seat(table.passTarget(seat)).username},
+                 {"phase",         passing ? "passing" : "playing"},
+                 {"hasPassed",     table.hasPassed(seat)},
+                 {"hand",          cardsToJson(table.hand(seat))},
+                 {"trick",         state.trickNumber()},
+                 {"cardsOnTable",  onTable},
+                 {"heartsBroken",  state.heartsBroken()},
+                 {"turn",          (!passing && state.getActivePlayer() >= 0)
+                                       ? table.seat(state.getActivePlayer()).username : QString()},
+                 {"waitingFor",    QJsonArray::fromStringList(game->disconnectedNames())}});
+
+    sendToLobby(*game, "player_reconnected",
+                {{"username", conn.username}, {"playerNum", seat + 1}}, *conn.playerId);
+    logMessage("[Game] \"" + conn.username + "\" rejoined game " + QString::number(game->lobbyId()) +
+               (game->isPaused() ? "; still paused" : "; resuming"));
+
+    // Nobody missing any more: carry on. While playing, re-send the turn so
+    // the active player gets their legalCards again. While passing, players
+    // who haven't passed yet just send pass_cards.
+    if (!game->isPaused() && !passing && state.getActivePlayer() >= 0)
+        announceTurn(*game, state.getActivePlayer());
+    emit stateChanged();
+}
+
+// disband_game {}  ->  disband_game_result; the others get game_stopped.
+// Host only, and only while the game is paused waiting for someone
+// (use case 18 extension b: "the host may choose to disband the game").
+void Server::handleDisbandGame(Connection& conn, const Message& request)
+{
+    GameManager* game = nullptr;
+    int seat = -1;
+    if (!findSeat(conn, request, game, seat))
+        return;
+    if (!game->lobby().isHost(*conn.playerId))
+        return replyFail(conn, request, ErrorCode::NotHost, "only the host can disband the game");
+    if (!game->isPaused())
+        return replyFail(conn, request, ErrorCode::GameNotPaused,
+                         "you can only disband while waiting for a disconnected player");
+
+    logMessage("[Game] host \"" + conn.username + "\" disbanded game " + QString::number(game->lobbyId()));
+    replyOk(conn, request, "game disbanded");
+    disbandGame(*game, "game_stopped",
+                {{"username", conn.username},
+                 {"reason",   "host_disbanded"},
+                 {"message",  "The host disbanded the game."}});
+}
+
+// ===========================================================================
+//  Play again (issue #67 / use case 21, test cases 22 and 22.1)
+//
+//    after game_ended, each player:
+//      -> play_again {vote:true}       (vote defaults to true)
+//      <- play_again_result {votes}
+//      others <- play_again_vote {username, votes, needed:4}
+//    when all 4 have voted yes:
+//      everyone <- game_started {players, scores:[0,0,0,0]}, then round_started ...
+//    if anyone votes no ({vote:false}), leaves, logs out or disconnects:
+//      the others <- game_stopped, and everyone is back on the main menu (22.1)
+// ===========================================================================
+
+void Server::handlePlayAgain(Connection& conn, const Message& request)
+{
+    GameManager* game = nullptr;
+    int seat = -1;
+    if (!findSeat(conn, request, game, seat))
+        return;
+    if (game->state() != GameManager::State::Finished)
+        return replyFail(conn, request, ErrorCode::GameNotOver, "the game isn't over yet");
+
+    // Voting no = "I'm not playing again": no rematch for anyone.
+    if (!request.body.value("vote").toBool(true)) {
+        logMessage("[Game] \"" + conn.username + "\" voted not to play again; game " +
+                   QString::number(game->lobbyId()) + " closed");
+        replyOk(conn, request, "you left the game");
+        disbandGame(*game, "game_stopped",
+                    {{"username", conn.username},
+                     {"reason",   "declined"},
+                     {"message",  conn.username + " doesn't want to play again."}});
+        return;
+    }
+
+    if (game->voteToPlayAgain(*conn.playerId) == GameManager::VoteResult::AlreadyVoted)
+        return replyFail(conn, request, ErrorCode::AlreadyVoted, "you already voted to play again");
+
+    const QJsonArray votes = QJsonArray::fromStringList(game->playAgainVoters());
+    replyOk(conn, request, "vote counted", {{"votes", votes}, {"needed", Lobby::kMaxPlayers}});
+    sendToLobby(*game, "play_again_vote",
+                {{"username", conn.username}, {"votes", votes}, {"needed", Lobby::kMaxPlayers}},
+                *conn.playerId);
+    emit stateChanged();
+
+    if (!game->allVotedToPlayAgain())
+        return;
+
+    // Test case 22: same players, scores back to 0, new deal.
+    game->playAgain();
+    logMessage("[Game] lobby " + QString::number(game->lobbyId()) + ": everyone voted to play again");
+    QJsonArray scores;
+    for (int s : game->table()->scores())
+        scores.append(s);
+    sendToLobby(*game, "game_started", {{"players", game->lobby().playerNames()}, {"scores", scores}});
+    announceRound(*game);
 }
 
 std::vector<Server::GameInfo> Server::viewHeartsGames() const
